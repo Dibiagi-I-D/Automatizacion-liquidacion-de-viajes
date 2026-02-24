@@ -1,18 +1,28 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
-import authRoutes from './routes/auth'
-import gastosRoutes from './routes/gastos'
-import softlandRoutes from './routes/softland'
-import driversRoutes from './routes/drivers'
+import authRoutes from './routes/auth.js'
+import gastosRoutes from './routes/gastos.js'
+import softlandRoutes from './routes/softland.js'
+import driversRoutes from './routes/drivers.js'
 
 dotenv.config()
 
 const app = express()
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 3001
 
-// Middlewares
-app.use(cors())
+// CORS - permitir frontend local y producción
+const allowedOrigins = [
+  'http://localhost:8080',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  process.env.FRONTEND_URL
+].filter(Boolean) as string[]
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}))
 app.use(express.json())
 
 // Rutas

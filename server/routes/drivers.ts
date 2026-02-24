@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
-import driversApiService from '../services/driversApiService';
-import { authenticateToken } from '../middleware/auth';
+import driversApiService from '../services/driversApiService.js';
+import { authenticateToken } from '../middleware/auth.js';
 
 const router = Router();
 

@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { PrismaClient } from '@prisma/client'
-import { authenticateToken, AuthRequest } from '../middleware/auth'
-import { calcularPaso } from '../utils/calcularPaso'
+import { authenticateToken, AuthRequest } from '../middleware/auth.js'
+import { calcularPaso } from '../utils/calcularPaso.js'
 
 const router = Router()
 const prisma = new PrismaClient()

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
-import sqlServerService from '../services/sqlServerService';
-import { authenticateToken } from '../middleware/auth';
+import sqlServerService from '../services/sqlServerService.js';
+import { authenticateToken } from '../middleware/auth.js';
 
 const router = Router();
 
