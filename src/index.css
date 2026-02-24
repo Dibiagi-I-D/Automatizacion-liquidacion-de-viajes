@@ -1,0 +1,191 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-surface: #0f1117;
+  --color-surface-elevated: #161921;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--color-surface);
+  color: #e2e8f0;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  letter-spacing: -0.01em;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/[0.04] border border-white/[0.06] rounded-2xl;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+
+  .glass-card:active {
+    @apply bg-white/[0.06] border-white/[0.1];
+  }
+
+  .btn {
+    @apply min-h-[48px] min-w-[48px] flex items-center justify-center px-6 py-3 rounded-xl font-semibold text-sm tracking-wide transition-all duration-150 active:scale-[0.97];
+  }
+
+  .btn-primary {
+    @apply btn bg-emerald-600 hover:bg-emerald-500 text-white;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  .btn-primary:active {
+    @apply bg-emerald-700;
+  }
+
+  .btn-secondary {
+    @apply btn bg-white/[0.06] hover:bg-white/[0.1] text-gray-200 border border-white/[0.08];
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 hover:bg-red-500 text-white;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+
+  .btn-danger:active {
+    @apply bg-red-700;
+  }
+
+  .input-field {
+    @apply min-h-[48px] w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500/40 focus:ring-1 focus:ring-emerald-500/20 transition-all;
+    font-size: 16px;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium;
+  }
+
+  .badge-paso1 {
+    @apply badge bg-emerald-500/15 text-emerald-400;
+  }
+
+  .badge-paso2 {
+    @apply badge bg-amber-500/15 text-amber-400;
+  }
+
+  .card-gasto {
+    @apply glass-card p-4 active:scale-[0.98] transition-transform;
+  }
+
+  .bottom-nav {
+    @apply fixed bottom-0 left-0 right-0 bg-[#0f1117]/95 backdrop-blur-xl border-t border-white/[0.06] z-50;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .nav-item {
+    @apply flex-1 flex flex-col items-center justify-center min-h-[56px] py-2 px-4 text-gray-500 transition-colors duration-150;
+  }
+
+  .nav-item.active {
+    @apply text-emerald-400;
+  }
+
+  .section-container {
+    @apply max-w-2xl mx-auto px-4 py-6;
+    padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
+  }
+
+  /* Status badges */
+  .status-open {
+    @apply bg-emerald-500/10 text-emerald-400 border border-emerald-500/20;
+  }
+
+  .status-closed {
+    @apply bg-gray-500/10 text-gray-400 border border-gray-500/20;
+  }
+
+  /* Info panel */
+  .info-panel {
+    @apply p-4 bg-white/[0.03] border border-white/[0.06] rounded-xl;
+  }
+}
+
+/* Animations */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.25s ease-out;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 0.8s linear infinite;
+}
+
+/* Paso indicator */
+.paso-indicator {
+  @apply fixed top-20 right-4 z-40 px-3 py-1.5 rounded-lg font-semibold text-xs tracking-wide transition-all duration-200;
+}
+
+.paso-indicator.paso1 {
+  @apply bg-emerald-600 text-white;
+}
+
+.paso-indicator.paso2 {
+  @apply bg-amber-600 text-white;
+}

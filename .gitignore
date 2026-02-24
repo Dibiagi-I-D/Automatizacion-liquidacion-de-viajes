@@ -1,0 +1,16 @@
+node_modules
+dist
+.env
+.DS_Store
+*.log
+coverage
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.tmp
+.cache
+build
+.turbo
+prisma/migrations
