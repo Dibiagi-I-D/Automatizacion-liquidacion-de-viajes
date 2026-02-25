@@ -4,7 +4,7 @@ import axios from 'axios'
 const router = Router()
 
 // Gemini 2.5 Flash — rápido, gratuito y multimodal
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent'
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 // ════════════════════════════════════════════
 // POST /api/ocr/scan
@@ -76,16 +76,21 @@ REGLAS IMPORTANTES:
         generationConfig: {
           temperature: 0.1,
           maxOutputTokens: 2048,
+          thinkingConfig: {
+            thinkingBudget: 0
+          }
         }
       },
       {
         headers: { 'Content-Type': 'application/json' },
-        timeout: 30000
+        timeout: 60000
       }
     )
 
-    // Extraer la respuesta de Gemini
-    const geminiText = geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    // Extraer la respuesta de Gemini (buscar la parte con texto, no thinking)
+    const parts = geminiResponse.data?.candidates?.[0]?.content?.parts || []
+    const textPart = parts.find((p: any) => p.text !== undefined)
+    const geminiText = textPart?.text || ''
 
     console.log('[OCR] Respuesta de Gemini:')
     console.log('─'.repeat(50))
