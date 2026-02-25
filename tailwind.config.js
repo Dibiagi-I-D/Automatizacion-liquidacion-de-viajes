@@ -26,15 +26,6 @@ export default {
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
       },
-      animation: {
-        'scan-line': 'scanLine 2.5s ease-in-out infinite',
-      },
-      keyframes: {
-        scanLine: {
-          '0%, 100%': { top: '8%' },
-          '50%': { top: '88%' },
-        },
-      },
     },
   },
   plugins: [],

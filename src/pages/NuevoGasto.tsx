@@ -4,106 +4,206 @@ import { useGastos } from '../context/GastosContext'
 import { Pais, TipoGasto, BANDERAS, NOMBRES_PAIS, NOMBRES_TIPO, calcularPasoVisual } from '../types'
 import { FaCheck, FaSpinner, FaArrowLeft, FaReceipt, FaCamera, FaTimes, FaImage } from 'react-icons/fa'
 import { createWorker, Worker } from 'tesseract.js'
-import TicketScanner from '../components/TicketScanner'
 
 /**
- * Preprocesar imagen en Canvas para mejorar el OCR:
- * 1. Escalar a un ancho óptimo (1200px)
- * 2. Convertir a escala de grises
- * 3. Aumentar contraste agresivamente
- * 4. Binarización Otsu (blanco/negro puro)
- * 5. Invertir si el fondo es oscuro (tickets térmicos)
+ * MOTOR OCR ULTRA-PRECISO para tickets de gasto
+ * ==============================================
+ * Genera MÚLTIPLES variantes de la imagen y ejecuta Tesseract en cada una,
+ * luego combina los mejores resultados para máxima precisión.
+ *
+ * Variantes generadas:
+ * 1. Original escalada - para tickets bien impresos
+ * 2. Binarización Otsu clásica - para la mayoría de tickets
+ * 3. Alto contraste + sharpen - para tickets desvaídos o con poca tinta
+ * 4. Binarización adaptativa (local) - para fotos con iluminación desigual
+ * 5. Inversión inteligente - para tickets térmicos oscuros
  */
-function preprocesarImagen(source: File | Blob): Promise<Blob> {
+
+/** Escalar imagen a resolución óptima para OCR */
+function escalarImagen(img: HTMLImageElement): HTMLCanvasElement {
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')!
+  const TARGET_WIDTH = 1600
+  const scale = Math.min(TARGET_WIDTH / img.width, 2.5)
+  canvas.width = Math.round(img.width * scale)
+  canvas.height = Math.round(img.height * scale)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+  return canvas
+}
+
+/** Convertir a escala de grises */
+function aGrises(imageData: ImageData): Uint8Array {
+  const gray = new Uint8Array(imageData.width * imageData.height)
+  const d = imageData.data
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    gray[j] = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])
+  }
+  return gray
+}
+
+/** Calcular umbral Otsu global */
+function umbralOtsu(gray: Uint8Array): number {
+  const hist = new Array(256).fill(0)
+  for (const g of gray) hist[g]++
+  const total = gray.length
+  let sumTotal = 0
+  for (let i = 0; i < 256; i++) sumTotal += i * hist[i]
+  let sumBack = 0, wBack = 0, maxVar = 0, threshold = 128
+  for (let t = 0; t < 256; t++) {
+    wBack += hist[t]
+    if (wBack === 0) continue
+    const wFore = total - wBack
+    if (wFore === 0) break
+    sumBack += t * hist[t]
+    const mBack = sumBack / wBack
+    const mFore = (sumTotal - sumBack) / wFore
+    const v = wBack * wFore * (mBack - mFore) ** 2
+    if (v > maxVar) { maxVar = v; threshold = t }
+  }
+  return threshold
+}
+
+/** Aplicar binarización con un umbral dado a un ImageData */
+function aplicarBinarizacion(canvas: HTMLCanvasElement, gray: Uint8Array, threshold: number, invertir: boolean): void {
+  const ctx = canvas.getContext('2d')!
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const d = imgData.data
+  let black = 0, white = 0
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    const val = gray[j] > threshold ? 255 : 0
+    if (val === 0) black++; else white++
+    d[i] = val; d[i + 1] = val; d[i + 2] = val
+  }
+  // Invertir si fondo oscuro o forzado
+  if (invertir || black > white) {
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = 255 - d[i]; d[i + 1] = 255 - d[i + 1]; d[i + 2] = 255 - d[i + 2]
+    }
+  }
+  ctx.putImageData(imgData, 0, 0)
+}
+
+/** Variante 1: Original escalada + leve aumento de contraste */
+function varianteOriginal(img: HTMLImageElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const canvas = escalarImagen(img)
+    const ctx = canvas.getContext('2d')!
+    // Leve boost de contraste
+    ctx.filter = 'contrast(1.3) brightness(1.05)'
+    ctx.drawImage(canvas, 0, 0)
+    ctx.filter = 'none'
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('Blob error')), 'image/png')
+  })
+}
+
+/** Variante 2: Binarización Otsu clásica */
+function varianteOtsu(img: HTMLImageElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const canvas = escalarImagen(img)
+    const ctx = canvas.getContext('2d')!
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const gray = aGrises(imgData)
+    const thr = umbralOtsu(gray)
+    aplicarBinarizacion(canvas, gray, thr, false)
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('Blob error')), 'image/png')
+  })
+}
+
+/** Variante 3: Alto contraste + nitidez (para tickets desvaídos) */
+function varianteAltoContraste(img: HTMLImageElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const canvas = escalarImagen(img)
+    const ctx = canvas.getContext('2d')!
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const d = imgData.data
+    // Escala de grises + estiramiento de histograma
+    let min = 255, max = 0
+    const gray: number[] = []
+    for (let i = 0; i < d.length; i += 4) {
+      const g = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])
+      gray.push(g)
+      if (g < min) min = g
+      if (g > max) max = g
+    }
+    const range = max - min || 1
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+      const stretched = Math.round(((gray[j] - min) / range) * 255)
+      const val = stretched > 140 ? 255 : 0  // Umbral agresivo
+      d[i] = val; d[i + 1] = val; d[i + 2] = val
+    }
+    ctx.putImageData(imgData, 0, 0)
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('Blob error')), 'image/png')
+  })
+}
+
+/** Variante 4: Binarización adaptativa local (ventana deslizante) para iluminación desigual */
+function varianteAdaptativa(img: HTMLImageElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const canvas = escalarImagen(img)
+    const ctx = canvas.getContext('2d')!
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const w = canvas.width, h = canvas.height
+    const gray = aGrises(imgData)
+    const d = imgData.data
+
+    // Calcular imagen integral para media local rápida
+    const integral = new Float64Array((w + 1) * (h + 1))
+    for (let y = 0; y < h; y++) {
+      let rowSum = 0
+      for (let x = 0; x < w; x++) {
+        rowSum += gray[y * w + x]
+        integral[(y + 1) * (w + 1) + (x + 1)] = rowSum + integral[y * (w + 1) + (x + 1)]
+      }
+    }
+
+    // Binarización adaptativa con ventana 25x25
+    const winSize = Math.max(25, Math.round(Math.min(w, h) / 20))
+    const halfWin = Math.floor(winSize / 2)
+    const C = 10 // Constante de offset
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const x1 = Math.max(0, x - halfWin)
+        const y1 = Math.max(0, y - halfWin)
+        const x2 = Math.min(w - 1, x + halfWin)
+        const y2 = Math.min(h - 1, y + halfWin)
+        const count = (x2 - x1 + 1) * (y2 - y1 + 1)
+        const sum = integral[(y2 + 1) * (w + 1) + (x2 + 1)]
+                  - integral[y1 * (w + 1) + (x2 + 1)]
+                  - integral[(y2 + 1) * (w + 1) + x1]
+                  + integral[y1 * (w + 1) + x1]
+        const mean = sum / count
+        const idx = (y * w + x) * 4
+        const val = gray[y * w + x] > (mean - C) ? 255 : 0
+        d[idx] = val; d[idx + 1] = val; d[idx + 2] = val
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0)
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('Blob error')), 'image/png')
+  })
+}
+
+/** Generar todas las variantes de una imagen para OCR */
+function generarVariantesImagen(source: File | Blob): Promise<Blob[]> {
   return new Promise((resolve, reject) => {
     const img = new Image()
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')!
-
-      // Escalar al ancho óptimo manteniendo aspect ratio
-      const TARGET_WIDTH = 1200
-      const scale = Math.min(TARGET_WIDTH / img.width, 2) // no agrandar más de 2x
-      canvas.width = Math.round(img.width * scale)
-      canvas.height = Math.round(img.height * scale)
-
-      // Dibujar imagen escalada
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-
-      // Obtener datos de píxeles
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      const data = imageData.data
-
-      // Paso 1: Convertir a escala de grises
-      const grayValues: number[] = []
-      for (let i = 0; i < data.length; i += 4) {
-        // Luminancia ponderada (mejor para texto)
-        const gray = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
-        data[i] = gray
-        data[i + 1] = gray
-        data[i + 2] = gray
-        grayValues.push(gray)
+    img.onload = async () => {
+      try {
+        const variantes = await Promise.all([
+          varianteOriginal(img),
+          varianteOtsu(img),
+          varianteAltoContraste(img),
+          varianteAdaptativa(img),
+        ])
+        resolve(variantes)
+      } catch (err) {
+        reject(err)
       }
-
-      // Paso 2: Calcular umbral Otsu para binarización
-      const histogram = new Array(256).fill(0)
-      for (const g of grayValues) histogram[g]++
-
-      const total = grayValues.length
-      let sumTotal = 0
-      for (let i = 0; i < 256; i++) sumTotal += i * histogram[i]
-
-      let sumBack = 0
-      let weightBack = 0
-      let maxVariance = 0
-      let threshold = 128
-
-      for (let t = 0; t < 256; t++) {
-        weightBack += histogram[t]
-        if (weightBack === 0) continue
-        const weightFore = total - weightBack
-        if (weightFore === 0) break
-
-        sumBack += t * histogram[t]
-        const meanBack = sumBack / weightBack
-        const meanFore = (sumTotal - sumBack) / weightFore
-        const variance = weightBack * weightFore * (meanBack - meanFore) ** 2
-
-        if (variance > maxVariance) {
-          maxVariance = variance
-          threshold = t
-        }
-      }
-
-      // Paso 3: Binarizar con el umbral Otsu
-      let blackCount = 0
-      let whiteCount = 0
-      for (let i = 0; i < data.length; i += 4) {
-        const val = data[i] > threshold ? 255 : 0
-        if (val === 0) blackCount++
-        else whiteCount++
-        data[i] = val
-        data[i + 1] = val
-        data[i + 2] = val
-      }
-
-      // Paso 4: Invertir si el fondo es oscuro (más negro que blanco = ticket térmico invertido)
-      if (blackCount > whiteCount) {
-        for (let i = 0; i < data.length; i += 4) {
-          data[i] = 255 - data[i]
-          data[i + 1] = 255 - data[i + 1]
-          data[i + 2] = 255 - data[i + 2]
-        }
-      }
-
-      ctx.putImageData(imageData, 0, 0)
-
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob)
-        else reject(new Error('Error al crear blob de imagen procesada'))
-      }, 'image/png')
     }
-    img.onerror = () => reject(new Error('Error al cargar la imagen'))
+    img.onerror = () => reject(new Error('Error al cargar imagen'))
     img.src = URL.createObjectURL(source)
   })
 }
@@ -396,7 +496,6 @@ export default function NuevoGasto() {
   const [ocrPreview, setOcrPreview] = useState<string | null>(null)
   const [ocrRawText, setOcrRawText] = useState<string | null>(null)
   const [showOcrResult, setShowOcrResult] = useState(false)
-  const [scannerOpen, setScannerOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const workerRef = useRef<Worker | null>(null)
 
@@ -422,10 +521,9 @@ export default function NuevoGasto() {
   }, [])
 
   /**
-   * Procesar imagen con OCR:
-   * 1. Preprocesar con Canvas (grayscale + Otsu binarization)
-   * 2. Ejecutar Tesseract en español con parámetros optimizados
-   * 3. Extraer datos inteligentemente del texto reconocido
+   * MOTOR OCR MULTI-PASADA ULTRA-PRECISO
+   * Genera 4 variantes de la imagen, ejecuta OCR en cada una con distintos
+   * modos de segmentación, y combina los resultados para máxima precisión.
    */
   const procesarImagenOCR = async (source: File | Blob, previewUrl?: string) => {
     try {
@@ -444,58 +542,121 @@ export default function NuevoGasto() {
         reader.readAsDataURL(source)
       }
 
-      // Preprocesar la imagen (escala de grises + binarización Otsu)
-      setOcrStatus('Mejorando imagen para lectura...')
-      setOcrProgress(5)
-      const imagenProcesada = await preprocesarImagen(source)
+      // Paso 1: Generar múltiples variantes de la imagen
+      setOcrStatus('Optimizando imagen (4 variantes)...')
+      setOcrProgress(3)
+      const variantes = await generarVariantesImagen(source)
+      const nombresVariantes = ['Original mejorada', 'Binarización Otsu', 'Alto contraste', 'Binarización adaptativa']
 
-      // Crear worker de Tesseract con español
-      setOcrStatus('Iniciando reconocimiento...')
-      setOcrProgress(10)
+      // Paso 2: Crear worker de Tesseract con español
+      setOcrStatus('Iniciando motor de reconocimiento...')
+      setOcrProgress(8)
       const worker = await createWorker('spa', 1, {
-        logger: (m) => {
-          if (m.status === 'recognizing text') {
-            setOcrProgress(10 + Math.round(m.progress * 85))
-            setOcrStatus(`Leyendo texto ${Math.round(m.progress * 100)}%`)
-          }
-        }
+        logger: () => {} // silenciar logs individuales, manejamos progreso manualmente
       })
       workerRef.current = worker
 
-      // Parámetros optimizados para tickets - NO usar whitelist
-      await worker.setParameters({
-        tessedit_pageseg_mode: 6 as any,  // Assume a single uniform block of text
-        preserve_interword_spaces: '1',
-      })
+      // Paso 3: Ejecutar OCR en cada variante con distintos PSM
+      // PSM 6 = uniform block (bueno para tickets)
+      // PSM 3 = fully automatic (bueno como fallback)
+      const configs: Array<{ psm: number; nombre: string }> = [
+        { psm: 6, nombre: 'Bloque uniforme' },
+        { psm: 3, nombre: 'Auto-detección' },
+      ]
 
-      // Reconocer texto de la imagen preprocesada
-      const { data: { text } } = await worker.recognize(imagenProcesada)
+      const resultados: Array<{ text: string; confidence: number; variante: string; config: string }> = []
+      const totalPasadas = variantes.length * configs.length
+      let pasadaActual = 0
 
-      console.log('--- OCR RAW TEXT ---')
-      console.log(text)
-      console.log('--- END OCR ---')
-      setOcrRawText(text)
+      for (let vi = 0; vi < variantes.length; vi++) {
+        for (const config of configs) {
+          pasadaActual++
+          const pct = 10 + Math.round((pasadaActual / totalPasadas) * 80)
+          setOcrProgress(pct)
+          setOcrStatus(`Leyendo: ${nombresVariantes[vi]} (${config.nombre}) [${pasadaActual}/${totalPasadas}]`)
 
-      // Extraer datos del texto reconocido
-      setOcrStatus('Extrayendo datos...')
+          try {
+            await worker.setParameters({
+              tessedit_pageseg_mode: config.psm as any,
+              preserve_interword_spaces: '1',
+            })
+            const { data: { text, confidence } } = await worker.recognize(variantes[vi])
+            if (text.trim().length > 5) {
+              resultados.push({
+                text,
+                confidence,
+                variante: nombresVariantes[vi],
+                config: config.nombre,
+              })
+              console.log(`[OCR] ${nombresVariantes[vi]} / ${config.nombre}: confianza=${confidence.toFixed(1)}%, chars=${text.length}`)
+            }
+          } catch (err) {
+            console.warn(`[OCR] Error en ${nombresVariantes[vi]} / ${config.nombre}:`, err)
+          }
+        }
+      }
+
+      // Paso 4: Seleccionar el mejor resultado
+      setOcrStatus('Analizando resultados...')
+      setOcrProgress(92)
+
+      if (resultados.length === 0) {
+        throw new Error('No se pudo leer texto de ninguna variante')
+      }
+
+      // Ordenar por confianza y elegir el mejor
+      resultados.sort((a, b) => b.confidence - a.confidence)
+
+      // Usar el texto con mayor confianza como base
+      const mejorTexto = resultados[0].text
+      console.log(`\n[OCR] ★ Mejor resultado: ${resultados[0].variante} / ${resultados[0].config} (${resultados[0].confidence.toFixed(1)}%)`)
+      console.log('--- BEST OCR TEXT ---')
+      console.log(mejorTexto)
+      console.log('--- END ---')
+
+      // También intentar extraer datos de TODOS los resultados buenos
+      // y usar el que consiga extraer más información
+      const extracciones = resultados
+        .filter(r => r.confidence > 30)
+        .map(r => ({
+          ...extraerDatosDeTexto(r.text),
+          text: r.text,
+          confidence: r.confidence,
+          info: `${r.variante} / ${r.config}`,
+        }))
+
+      // Elegir la extracción que logró sacar importe (prioridad) + más datos
+      let mejorExtraccion = extracciones[0]
+      for (const ext of extracciones) {
+        const score = (ext.importe ? 100 : 0) + (ext.fechaExtraida ? 20 : 0) + (ext.paisDetectado ? 15 : 0) + (ext.descripcionExtraida ? 10 : 0)
+        const mejorScore = (mejorExtraccion.importe ? 100 : 0) + (mejorExtraccion.fechaExtraida ? 20 : 0) + (mejorExtraccion.paisDetectado ? 15 : 0) + (mejorExtraccion.descripcionExtraida ? 10 : 0)
+        if (score > mejorScore || (score === mejorScore && ext.confidence > mejorExtraccion.confidence)) {
+          mejorExtraccion = ext
+        }
+      }
+
+      console.log(`[OCR] ★ Mejor extracción de: ${mejorExtraccion.info}`)
+      setOcrRawText(mejorExtraccion.text)
+
+      // Extraer datos del mejor resultado
+      setOcrStatus('Cargando datos...')
       setOcrProgress(98)
-      const { importe: importeExtraido, descripcionExtraida, fechaExtraida, paisDetectado } = extraerDatosDeTexto(text)
 
-      if (importeExtraido) {
-        setImporte(importeExtraido)
-        console.log('Importe extraído:', importeExtraido)
+      if (mejorExtraccion.importe) {
+        setImporte(mejorExtraccion.importe)
+        console.log('Importe extraído:', mejorExtraccion.importe)
       }
-      if (descripcionExtraida && !descripcion) {
-        setDescripcion(descripcionExtraida)
-        console.log('Descripción extraída:', descripcionExtraida)
+      if (mejorExtraccion.descripcionExtraida && !descripcion) {
+        setDescripcion(mejorExtraccion.descripcionExtraida)
+        console.log('Descripción extraída:', mejorExtraccion.descripcionExtraida)
       }
-      if (fechaExtraida) {
-        setFecha(fechaExtraida)
-        console.log('Fecha extraída:', fechaExtraida)
+      if (mejorExtraccion.fechaExtraida) {
+        setFecha(mejorExtraccion.fechaExtraida)
+        console.log('Fecha extraída:', mejorExtraccion.fechaExtraida)
       }
-      if (paisDetectado) {
-        setPais(paisDetectado)
-        console.log('País detectado:', paisDetectado)
+      if (mejorExtraccion.paisDetectado) {
+        setPais(mejorExtraccion.paisDetectado)
+        console.log('País detectado:', mejorExtraccion.paisDetectado)
       }
 
       setOcrProgress(100)
@@ -540,12 +701,6 @@ export default function NuevoGasto() {
     setOcrPreview(null)
     setOcrRawText(null)
     setShowOcrResult(false)
-  }
-
-  // Handler cuando el escáner captura una foto
-  const handleScannerCapture = (blob: Blob, previewUrl: string) => {
-    setScannerOpen(false)
-    procesarImagenOCR(blob, previewUrl)
   }
 
   // Calcular paso visual en tiempo real
@@ -663,27 +818,22 @@ export default function NuevoGasto() {
 
       <h1 className="text-lg font-semibold text-white mb-5">Nuevo Gasto</h1>
 
-      {/* Scanner de cámara en vivo */}
-      <TicketScanner
-        open={scannerOpen}
-        onClose={() => setScannerOpen(false)}
-        onCapture={handleScannerCapture}
-      />
-
-      {/* Botones OCR - Escanear ticket */}
+      {/* Leer ticket — un solo botón para foto o galería */}
       <div className="mb-5">
+        {/* Input oculto: capture="environment" ofrece cámara trasera en móvil, galería en desktop */}
         <input
           ref={fileInputRef}
           type="file"
           accept="image/*"
+          capture="environment"
           className="hidden"
           onChange={handleFileSelect}
         />
 
-        {/* Botón principal: Abrir escáner */}
+        {/* Botón principal: Sacar foto / seleccionar imagen */}
         <button
           type="button"
-          onClick={() => setScannerOpen(true)}
+          onClick={() => fileInputRef.current?.click()}
           disabled={ocrProcessing}
           className={`w-full glass-card p-4 flex items-center gap-3 transition-all active:scale-[0.98] ${
             ocrProcessing 
@@ -700,26 +850,40 @@ export default function NuevoGasto() {
           </div>
           <div className="text-left flex-1">
             <p className="text-sm font-medium text-white">
-              {ocrProcessing ? 'Procesando imagen...' : 'Escanear ticket'}
+              {ocrProcessing ? 'Analizando ticket...' : 'Leer ticket con foto'}
             </p>
             <p className="text-[11px] text-gray-500">
               {ocrProcessing 
                 ? (ocrStatus || `Procesando ${ocrProgress}%`)
-                : 'Abrí la cámara para escanear el ticket'
+                : 'Sacá una foto o elegí una imagen del ticket'
               }
             </p>
           </div>
         </button>
 
-        {/* Botón secundario: Seleccionar de galería */}
+        {/* Botón alternativo: galería sin capture (para elegir foto existente) */}
         {!ocrProcessing && (
           <button
             type="button"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              // Crear un input sin capture para forzar galería
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = 'image/*'
+              input.onchange = (e) => {
+                const file = (e.target as HTMLInputElement).files?.[0]
+                if (file) {
+                  if (!file.type.startsWith('image/')) { alert('Seleccioná una imagen'); return }
+                  if (file.size > 10 * 1024 * 1024) { alert('La imagen es muy grande. Máximo 10MB.'); return }
+                  procesarImagenOCR(file)
+                }
+              }
+              input.click()
+            }}
             className="w-full mt-2 py-2.5 px-4 flex items-center justify-center gap-2 text-gray-500 hover:text-gray-300 text-xs transition-colors"
           >
             <FaImage className="text-[10px]" />
-            <span>O seleccionar imagen de la galería</span>
+            <span>O elegir imagen de la galería</span>
           </button>
         )}
 
