@@ -5,6 +5,271 @@ import { Pais, TipoGasto, BANDERAS, NOMBRES_PAIS, NOMBRES_TIPO, calcularPasoVisu
 import { FaCheck, FaSpinner, FaArrowLeft, FaReceipt, FaCamera, FaTimes } from 'react-icons/fa'
 import { createWorker, Worker } from 'tesseract.js'
 
+/**
+ * Preprocesar imagen en Canvas para mejorar el OCR:
+ * 1. Escalar a un ancho óptimo (1200px)
+ * 2. Convertir a escala de grises
+ * 3. Aumentar contraste agresivamente
+ * 4. Binarización Otsu (blanco/negro puro)
+ * 5. Invertir si el fondo es oscuro (tickets térmicos)
+ */
+function preprocesarImagen(file: File): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')!
+
+      // Escalar al ancho óptimo manteniendo aspect ratio
+      const TARGET_WIDTH = 1200
+      const scale = Math.min(TARGET_WIDTH / img.width, 2) // no agrandar más de 2x
+      canvas.width = Math.round(img.width * scale)
+      canvas.height = Math.round(img.height * scale)
+
+      // Dibujar imagen escalada
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+      // Obtener datos de píxeles
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imageData.data
+
+      // Paso 1: Convertir a escala de grises
+      const grayValues: number[] = []
+      for (let i = 0; i < data.length; i += 4) {
+        // Luminancia ponderada (mejor para texto)
+        const gray = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+        data[i] = gray
+        data[i + 1] = gray
+        data[i + 2] = gray
+        grayValues.push(gray)
+      }
+
+      // Paso 2: Calcular umbral Otsu para binarización
+      const histogram = new Array(256).fill(0)
+      for (const g of grayValues) histogram[g]++
+
+      const total = grayValues.length
+      let sumTotal = 0
+      for (let i = 0; i < 256; i++) sumTotal += i * histogram[i]
+
+      let sumBack = 0
+      let weightBack = 0
+      let maxVariance = 0
+      let threshold = 128
+
+      for (let t = 0; t < 256; t++) {
+        weightBack += histogram[t]
+        if (weightBack === 0) continue
+        const weightFore = total - weightBack
+        if (weightFore === 0) break
+
+        sumBack += t * histogram[t]
+        const meanBack = sumBack / weightBack
+        const meanFore = (sumTotal - sumBack) / weightFore
+        const variance = weightBack * weightFore * (meanBack - meanFore) ** 2
+
+        if (variance > maxVariance) {
+          maxVariance = variance
+          threshold = t
+        }
+      }
+
+      // Paso 3: Binarizar con el umbral Otsu
+      let blackCount = 0
+      let whiteCount = 0
+      for (let i = 0; i < data.length; i += 4) {
+        const val = data[i] > threshold ? 255 : 0
+        if (val === 0) blackCount++
+        else whiteCount++
+        data[i] = val
+        data[i + 1] = val
+        data[i + 2] = val
+      }
+
+      // Paso 4: Invertir si el fondo es oscuro (más negro que blanco = ticket térmico invertido)
+      if (blackCount > whiteCount) {
+        for (let i = 0; i < data.length; i += 4) {
+          data[i] = 255 - data[i]
+          data[i + 1] = 255 - data[i + 1]
+          data[i + 2] = 255 - data[i + 2]
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0)
+
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('Error al crear blob de imagen procesada'))
+      }, 'image/png')
+    }
+    img.onerror = () => reject(new Error('Error al cargar la imagen'))
+    img.src = URL.createObjectURL(file)
+  })
+}
+
+/**
+ * Normalizar un string numérico con formatos regionales a un float
+ * Soporta: 1.234,56 | 1,234.56 | 1234,56 | 1234.56
+ */
+function normalizarNumero(str: string): number {
+  let s = str.replace(/\s/g, '').replace(/\$/g, '')
+
+  // Formato argentino/europeo: 1.234,56 → puntos como separador miles, coma decimal
+  if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(s)) {
+    s = s.replace(/\./g, '').replace(',', '.')
+    return parseFloat(s)
+  }
+  // Formato US: 1,234.56 → comas como separador miles, punto decimal
+  if (/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/.test(s)) {
+    s = s.replace(/,/g, '')
+    return parseFloat(s)
+  }
+  // Solo coma como decimal: 1234,56
+  if (/^\d+(,\d{1,2})$/.test(s)) {
+    s = s.replace(',', '.')
+    return parseFloat(s)
+  }
+  // Solo punto como decimal: 1234.56
+  if (/^\d+(\.\d{1,2})$/.test(s)) {
+    return parseFloat(s)
+  }
+  // Número entero o con punto decimal largo
+  s = s.replace(/,/g, '')
+  return parseFloat(s)
+}
+
+/**
+ * Extraer el importe y descripción más probables de un texto OCR.
+ * Estrategia multi-paso con alta tolerancia a errores de OCR.
+ */
+function extraerDatosDeTexto(texto: string): { importe: string; descripcionExtraida: string; fechaExtraida: string } {
+  const lines = texto.split('\n').map(l => l.trim()).filter(l => l.length > 0)
+
+  // ────────── 1. Buscar por keywords de TOTAL ──────────
+  // Patrones ordenados por prioridad (más específico = más prioridad)
+  const patronesTotal: Array<{ regex: RegExp; prioridad: number }> = [
+    // "TOTAL" con variantes
+    { regex: /total\s*(?:a\s*pagar|final|general)?[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 100 },
+    { regex: /tot[ai]l[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 95 }, // OCR puede leer "totai"
+    { regex: /t[o0]tal[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 90 }, // OCR puede leer "t0tal"
+    // Importe
+    { regex: /importe\s*(?:total|final|neto)?[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 85 },
+    { regex: /imp[o0]rte[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 80 },
+    // Monto
+    { regex: /monto\s*(?:total|final)?[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 75 },
+    // A pagar
+    { regex: /a\s*pagar[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 70 },
+    // Neto / Bruto
+    { regex: /neto[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 55 },
+    { regex: /bruto[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 50 },
+    // Subtotal (menor prioridad que total)
+    { regex: /sub\s*total[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 45 },
+    // Valor / Precio
+    { regex: /valor[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 40 },
+    { regex: /precio[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 35 },
+    // Peaje especifico
+    { regex: /tarifa[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 60 },
+    { regex: /peaje[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 60 },
+    // Litros x precio = importe (estaciones de servicio)
+    { regex: /importe[\s:=$.]*(\d[\d.,]*\d|\d)/i, prioridad: 65 },
+  ]
+
+  let mejorImporteStr = ''
+  let mejorPrioridad = -1
+
+  // Buscar en el texto completo (uniendo líneas cercanas) y también línea por línea
+  const textoCompleto = lines.join(' ')
+  const bloques = [textoCompleto, ...lines]
+
+  for (const bloque of bloques) {
+    for (const { regex, prioridad } of patronesTotal) {
+      const match = bloque.match(regex)
+      if (match && match[1]) {
+        const num = normalizarNumero(match[1])
+        if (!isNaN(num) && num > 0 && prioridad > mejorPrioridad) {
+          mejorPrioridad = prioridad
+          mejorImporteStr = num.toString()
+        }
+      }
+    }
+  }
+
+  // ────────── 2. Si no encontró keyword, buscar número con $ delante ──────────
+  if (!mejorImporteStr) {
+    const regexPesos = /\$\s*(\d[\d.,]*\d|\d)/g
+    const candidatos: number[] = []
+    let m
+    while ((m = regexPesos.exec(textoCompleto)) !== null) {
+      const num = normalizarNumero(m[1])
+      if (!isNaN(num) && num > 0) candidatos.push(num)
+    }
+    if (candidatos.length > 0) {
+      // El más grande con $ es probablemente el total
+      mejorImporteStr = Math.max(...candidatos).toString()
+    }
+  }
+
+  // ────────── 3. Último recurso: el número más grande del ticket ──────────
+  if (!mejorImporteStr) {
+    const regexNums = /(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)/g
+    const candidatos: number[] = []
+    let m
+    while ((m = regexNums.exec(textoCompleto)) !== null) {
+      const num = normalizarNumero(m[1])
+      // Filtrar números que parecen fechas, horas, CUIT, etc.
+      if (!isNaN(num) && num > 0 && num < 100000000) {
+        // Ignorar si parece CUIT (11 dígitos) o fecha
+        const raw = m[1].replace(/[.,]/g, '')
+        if (raw.length <= 8) {
+          candidatos.push(num)
+        }
+      }
+    }
+    if (candidatos.length > 0) {
+      mejorImporteStr = Math.max(...candidatos).toString()
+    }
+  }
+
+  // ────────── 4. Extraer descripción (nombre del comercio o concepto) ──────────
+  const lineasTexto = lines.filter(l => {
+    // Descartar líneas que son solo números, fechas, espacios
+    if (l.length < 4) return false
+    if (/^[\d\s.,/$%:=\-*#]+$/.test(l)) return false
+    if (/^\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}/.test(l)) return false
+    if (/^(total|subtotal|importe|monto|iva|neto|bruto|efectivo|cambio|cuit|cae)/i.test(l)) return false
+    return true
+  })
+  const descripcionExtraida = lineasTexto.slice(0, 2).join(' - ').substring(0, 120)
+
+  // ────────── 5. Intentar extraer fecha del ticket ──────────
+  let fechaExtraida = ''
+  const regexFechas = [
+    /(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})/,  // dd/mm/yyyy
+    /(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2})/,   // dd/mm/yy
+  ]
+  for (const line of lines) {
+    for (const rx of regexFechas) {
+      const match = line.match(rx)
+      if (match) {
+        const dia = match[1].padStart(2, '0')
+        const mes = match[2].padStart(2, '0')
+        let anio = match[3]
+        if (anio.length === 2) anio = '20' + anio
+        // Validar rango
+        const diaNum = parseInt(dia)
+        const mesNum = parseInt(mes)
+        if (diaNum >= 1 && diaNum <= 31 && mesNum >= 1 && mesNum <= 12) {
+          fechaExtraida = `${anio}-${mes}-${dia}`
+          break
+        }
+      }
+    }
+    if (fechaExtraida) break
+  }
+
+  return { importe: mejorImporteStr, descripcionExtraida, fechaExtraida }
+}
+
 export default function NuevoGasto() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -23,6 +288,7 @@ export default function NuevoGasto() {
   // Estados para OCR
   const [ocrProcessing, setOcrProcessing] = useState(false)
   const [ocrProgress, setOcrProgress] = useState(0)
+  const [ocrStatus, setOcrStatus] = useState('')
   const [ocrPreview, setOcrPreview] = useState<string | null>(null)
   const [ocrRawText, setOcrRawText] = useState<string | null>(null)
   const [showOcrResult, setShowOcrResult] = useState(false)
@@ -51,150 +317,75 @@ export default function NuevoGasto() {
   }, [])
 
   /**
-   * Extraer el importe más probable de un texto OCR de ticket/recibo.
-   * Busca patrones como "TOTAL", "IMPORTE", "MONTO", etc. y extrae el número asociado.
-   * Si no encuentra keyword, toma el número más grande como candidato.
-   */
-  const extraerImporteDeTexto = (texto: string): { importe: string; descripcionExtraida: string } => {
-    const lines = texto.split('\n').map(l => l.trim()).filter(l => l.length > 0)
-    
-    // Patrones de keywords que suelen preceder al importe total
-    const keywordsTotal = [
-      /total\s*(?:a\s*pagar|final|general|neto|bruto)?[\s:$]*([0-9][0-9.,]*)/i,
-      /importe\s*(?:total|final|neto)?[\s:$]*([0-9][0-9.,]*)/i,
-      /monto\s*(?:total|final)?[\s:$]*([0-9][0-9.,]*)/i,
-      /a\s*pagar[\s:$]*([0-9][0-9.,]*)/i,
-      /subtotal[\s:$]*([0-9][0-9.,]*)/i,
-      /neto[\s:$]*([0-9][0-9.,]*)/i,
-      /valor[\s:$]*([0-9][0-9.,]*)/i,
-      /precio[\s:$]*([0-9][0-9.,]*)/i,
-    ]
-
-    let mejorImporte = ''
-    let mejorPrioridad = -1
-
-    // Buscar en cada línea por keywords
-    for (const line of lines) {
-      for (let i = 0; i < keywordsTotal.length; i++) {
-        const match = line.match(keywordsTotal[i])
-        if (match && match[1]) {
-          const prioridad = keywordsTotal.length - i // Más prioridad a "TOTAL"
-          if (prioridad > mejorPrioridad) {
-            mejorPrioridad = prioridad
-            mejorImporte = match[1]
-          }
-        }
-      }
-    }
-
-    // Si no encontró keyword, buscar todos los números y tomar el más grande
-    if (!mejorImporte) {
-      const todosLosNumeros: number[] = []
-      const regexNumeros = /\$?\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{1,2})?)/g
-      
-      for (const line of lines) {
-        let match
-        while ((match = regexNumeros.exec(line)) !== null) {
-          // Normalizar: si tiene formato 1.234,56 (AR) -> 1234.56
-          let numStr = match[1]
-          // Detectar formato argentino: 1.234,56
-          if (numStr.includes('.') && numStr.includes(',')) {
-            numStr = numStr.replace(/\./g, '').replace(',', '.')
-          } else if (numStr.includes(',')) {
-            // Solo coma: podría ser decimal
-            const partes = numStr.split(',')
-            if (partes[partes.length - 1].length <= 2) {
-              numStr = numStr.replace(',', '.')
-            } else {
-              numStr = numStr.replace(/,/g, '')
-            }
-          }
-          
-          const num = parseFloat(numStr)
-          if (!isNaN(num) && num > 0) {
-            todosLosNumeros.push(num)
-          }
-        }
-      }
-
-      if (todosLosNumeros.length > 0) {
-        const maximo = Math.max(...todosLosNumeros)
-        mejorImporte = maximo.toString()
-      }
-    } else {
-      // Normalizar el importe encontrado
-      let numStr = mejorImporte
-      if (numStr.includes('.') && numStr.includes(',')) {
-        numStr = numStr.replace(/\./g, '').replace(',', '.')
-      } else if (numStr.includes(',')) {
-        const partes = numStr.split(',')
-        if (partes[partes.length - 1].length <= 2) {
-          numStr = numStr.replace(',', '.')
-        } else {
-          numStr = numStr.replace(/,/g, '')
-        }
-      }
-      mejorImporte = numStr
-    }
-
-    // Extraer una descripción corta (primeras líneas que no sean solo números)
-    const descripcionLineas = lines
-      .filter(l => l.length > 3 && !/^[0-9\s.,/$%:=-]+$/.test(l))
-      .slice(0, 2)
-    const descripcionExtraida = descripcionLineas.join(' - ').substring(0, 100)
-
-    return {
-      importe: mejorImporte,
-      descripcionExtraida
-    }
-  }
-
-  /**
-   * Procesar imagen con OCR usando Tesseract.js
+   * Procesar imagen con OCR:
+   * 1. Preprocesar con Canvas (grayscale + Otsu binarization)
+   * 2. Ejecutar Tesseract en español con parámetros optimizados
+   * 3. Extraer datos inteligentemente del texto reconocido
    */
   const procesarImagenOCR = async (file: File) => {
     try {
       setOcrProcessing(true)
       setOcrProgress(0)
+      setOcrStatus('Preparando imagen...')
       setOcrRawText(null)
       setShowOcrResult(false)
 
-      // Crear preview de la imagen
+      // Crear preview de la imagen original
       const reader = new FileReader()
       reader.onload = (e) => setOcrPreview(e.target?.result as string)
       reader.readAsDataURL(file)
 
-      // Crear worker de Tesseract
+      // Preprocesar la imagen (escala de grises + binarización Otsu)
+      setOcrStatus('Mejorando imagen para lectura...')
+      setOcrProgress(5)
+      const imagenProcesada = await preprocesarImagen(file)
+
+      // Crear worker de Tesseract con español
+      setOcrStatus('Iniciando reconocimiento...')
+      setOcrProgress(10)
       const worker = await createWorker('spa', 1, {
         logger: (m) => {
           if (m.status === 'recognizing text') {
-            setOcrProgress(Math.round(m.progress * 100))
+            setOcrProgress(10 + Math.round(m.progress * 85))
+            setOcrStatus(`Leyendo texto ${Math.round(m.progress * 100)}%`)
           }
         }
       })
       workerRef.current = worker
 
-      // Configurar para mejor precisión en números
+      // Parámetros optimizados para tickets - NO usar whitelist
       await worker.setParameters({
-        tessedit_char_whitelist: '0123456789.,$ ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzáéíóúñÁÉÍÓÚÑ:/-+%\n ',
+        tessedit_pageseg_mode: 6 as any,  // Assume a single uniform block of text
+        preserve_interword_spaces: '1',
       })
 
-      // Reconocer texto
-      const { data: { text } } = await worker.recognize(file)
-      
-      console.log('OCR Raw text:', text)
+      // Reconocer texto de la imagen preprocesada
+      const { data: { text } } = await worker.recognize(imagenProcesada)
+
+      console.log('--- OCR RAW TEXT ---')
+      console.log(text)
+      console.log('--- END OCR ---')
       setOcrRawText(text)
 
-      // Extraer importe y descripción
-      const { importe: importeExtraido, descripcionExtraida } = extraerImporteDeTexto(text)
+      // Extraer datos del texto reconocido
+      setOcrStatus('Extrayendo datos...')
+      setOcrProgress(98)
+      const { importe: importeExtraido, descripcionExtraida, fechaExtraida } = extraerDatosDeTexto(text)
 
       if (importeExtraido) {
         setImporte(importeExtraido)
+        console.log('Importe extraído:', importeExtraido)
       }
       if (descripcionExtraida && !descripcion) {
         setDescripcion(descripcionExtraida)
+        console.log('Descripción extraída:', descripcionExtraida)
+      }
+      if (fechaExtraida) {
+        setFecha(fechaExtraida)
+        console.log('Fecha extraída:', fechaExtraida)
       }
 
+      setOcrProgress(100)
       setShowOcrResult(true)
 
       // Limpiar worker
@@ -203,10 +394,11 @@ export default function NuevoGasto() {
 
     } catch (error) {
       console.error('Error en OCR:', error)
-      alert('Error al procesar la imagen. Intentá con otra foto más clara.')
+      alert('Error al procesar la imagen. Intentá con otra foto más clara y bien enfocada.')
     } finally {
       setOcrProcessing(false)
       setOcrProgress(0)
+      setOcrStatus('')
     }
   }
 
@@ -386,7 +578,7 @@ export default function NuevoGasto() {
             </p>
             <p className="text-[11px] text-gray-500">
               {ocrProcessing 
-                ? `Reconociendo texto ${ocrProgress}%`
+                ? (ocrStatus || `Procesando ${ocrProgress}%`)
                 : 'Sacá una foto al ticket y se completa automáticamente'
               }
             </p>
