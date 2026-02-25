@@ -2,8 +2,9 @@ import { useState, FormEvent, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useGastos } from '../context/GastosContext'
 import { Pais, TipoGasto, BANDERAS, NOMBRES_PAIS, NOMBRES_TIPO, calcularPasoVisual } from '../types'
-import { FaCheck, FaSpinner, FaArrowLeft, FaReceipt, FaCamera, FaTimes } from 'react-icons/fa'
+import { FaCheck, FaSpinner, FaArrowLeft, FaReceipt, FaCamera, FaTimes, FaImage } from 'react-icons/fa'
 import { createWorker, Worker } from 'tesseract.js'
+import TicketScanner from '../components/TicketScanner'
 
 /**
  * Preprocesar imagen en Canvas para mejorar el OCR:
@@ -13,7 +14,7 @@ import { createWorker, Worker } from 'tesseract.js'
  * 4. Binarización Otsu (blanco/negro puro)
  * 5. Invertir si el fondo es oscuro (tickets térmicos)
  */
-function preprocesarImagen(file: File): Promise<Blob> {
+function preprocesarImagen(source: File | Blob): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => {
@@ -103,7 +104,7 @@ function preprocesarImagen(file: File): Promise<Blob> {
       }, 'image/png')
     }
     img.onerror = () => reject(new Error('Error al cargar la imagen'))
-    img.src = URL.createObjectURL(file)
+    img.src = URL.createObjectURL(source)
   })
 }
 
@@ -139,10 +140,110 @@ function normalizarNumero(str: string): number {
 }
 
 /**
+ * Detectar el país de origen del ticket basándose en pistas del texto.
+ * Analiza: moneda, CUIT/RUT/RUC, empresas conocidas, palabras clave regionales.
+ */
+function detectarPais(texto: string): 'ARG' | 'CHL' | 'URY' | null {
+  const t = texto.toUpperCase()
+
+  // ────── Puntuación por país ──────
+  let argScore = 0
+  let chlScore = 0
+  let uryScore = 0
+
+  // ── ARGENTINA ──
+  // Moneda
+  if (/\bARS\b/.test(t)) argScore += 10
+  if (/PESOS?\s*ARGENTINOS?/i.test(t)) argScore += 10
+  // Identificadores fiscales
+  if (/\bCUIT\b/.test(t)) argScore += 15
+  if (/\bC\.?U\.?I\.?T\.?\b/.test(t)) argScore += 15
+  if (/\bCAE\b/.test(t)) argScore += 10
+  if (/\bAFIP\b/.test(t)) argScore += 15
+  // Factura argentina
+  if (/FACTURA\s*[ABC]/.test(t)) argScore += 10
+  if (/TICKET\s*FACTURA/.test(t)) argScore += 8
+  if (/NOTA\s*DE\s*CR[EÉ]DITO/.test(t)) argScore += 5
+  // IVA argentino (21%, 10.5%, 27%)
+  if (/IVA\s*21/.test(t)) argScore += 8
+  if (/IVA\s*10[.,]5/.test(t)) argScore += 10
+  if (/IVA\s*27/.test(t)) argScore += 10
+  // Provincias / ciudades
+  if (/BUENOS\s*AIRES|CABA|CORDOBA|ROSARIO|MENDOZA|TUCUMAN|SANTA\s*FE|ENTRE\s*RIOS|LA\s*PLATA|MAR\s*DEL\s*PLATA/i.test(t)) argScore += 8
+  // Empresas comunes
+  if (/YPF|SHELL|AXION|PUMA\s*ENERGY|VIALIDAD|AUBASA|AUTOPISTA/i.test(t)) argScore += 7
+  // Peajes argentinos
+  if (/AUSA|AUSOL|AUTOPISTAS?\s*DEL\s*SOL|CAMINOS?\s*DEL\s*RIO|COVICO|COVISUR/i.test(t)) argScore += 12
+  // $ como moneda (compartido pero más probable ARG por contexto de la app)
+  if (/\$\s*\d/.test(t)) argScore += 3
+  // Responsable Inscripto / Monotributo
+  if (/RESP\.?\s*INSCR|MONOTRIBUTO|CONSUMIDOR\s*FINAL/i.test(t)) argScore += 10
+  // Ingresos Brutos
+  if (/INGRESOS?\s*BRUTOS?|ING\.?\s*BR\.?/i.test(t)) argScore += 10
+
+  // ── CHILE ──
+  // Moneda
+  if (/\bCLP\b/.test(t)) chlScore += 15
+  if (/PESOS?\s*CHILENOS?/i.test(t)) chlScore += 15
+  // Identificador fiscal
+  if (/\bRUT\b/.test(t)) chlScore += 12
+  if (/\bR\.?U\.?T\.?\b/.test(t)) chlScore += 12
+  if (/\bSII\b/.test(t)) chlScore += 15
+  if (/SERVICIO\s*DE\s*IMPUESTOS/i.test(t)) chlScore += 15
+  // Boleta / Factura chilena
+  if (/BOLETA\s*(ELECTR[OÓ]NICA|DE\s*VENTA)?/i.test(t)) chlScore += 8
+  if (/GUIA\s*DE\s*DESPACHO/i.test(t)) chlScore += 10
+  // IVA Chile (19%)
+  if (/IVA\s*19/.test(t)) chlScore += 12
+  // Ciudades / regiones
+  if (/SANTIAGO|VALPARAI[SZ]O|CONCEPCI[OÓ]N|ANTOFAGASTA|TEMUCO|RANCAGUA|TALCA|ARICA|IQUIQUE/i.test(t)) chlScore += 10
+  // Empresas / peajes Chile
+  if (/COPEC|ENEX|PETROBRAS|TERPEL|AUTOPISTA\s*CENTRAL|COSTANERA\s*NORTE|VESPUCIO|RUTA\s*DEL\s*MAIPO/i.test(t)) chlScore += 10
+  // TAG Chile
+  if (/\bTAG\b|TELEPEAJE/i.test(t)) chlScore += 5
+  // Peso chileno no usa decimales generalmente
+  if (/COMUNA\s*DE/i.test(t)) chlScore += 8
+
+  // ── URUGUAY ──
+  // Moneda
+  if (/\bUYU\b/.test(t)) uryScore += 15
+  if (/PESOS?\s*URUGUAYOS?/i.test(t)) uryScore += 15
+  if (/\bU\$S\b|\bUI\b/.test(t)) uryScore += 5
+  // Identificador fiscal
+  if (/\bRUC\b/.test(t)) uryScore += 10
+  if (/\bR\.?U\.?C\.?\b/.test(t)) uryScore += 10
+  if (/\bDGI\b/.test(t)) uryScore += 12
+  if (/\bBPS\b/.test(t)) uryScore += 8
+  if (/\bCFE\b/.test(t)) uryScore += 10 // Comprobante Fiscal Electrónico
+  // IVA Uruguay (22%)
+  if (/IVA\s*22/.test(t)) uryScore += 15
+  // Ciudades
+  if (/MONTEVIDEO|COLONIA|PUNTA\s*DEL\s*ESTE|SALTO|PAYSAND[UÚ]|RIVERA|MALDONADO|FRAY\s*BENTOS/i.test(t)) uryScore += 10
+  // Empresas / peajes Uruguay
+  if (/ANCAP|DUCSA|PETROBRAS|CORPORACI[OÓ]N\s*VIAL/i.test(t)) uryScore += 10
+  // e-Ticket / e-Factura
+  if (/e-?TICKET|e-?FACTURA|e-?BOLETA/i.test(t)) uryScore += 5
+  // Departamento (división administrativa uruguaya)
+  if (/DEPARTAMENTO\s*DE/i.test(t)) uryScore += 8
+
+  console.log('Detección de país - Scores:', { ARG: argScore, CHL: chlScore, URY: uryScore })
+
+  // Necesitamos al menos un puntaje mínimo para estar seguros
+  const minScore = 5
+  const maxScore = Math.max(argScore, chlScore, uryScore)
+
+  if (maxScore < minScore) return null
+
+  if (argScore >= chlScore && argScore >= uryScore) return 'ARG'
+  if (chlScore >= argScore && chlScore >= uryScore) return 'CHL'
+  return 'URY'
+}
+
+/**
  * Extraer el importe y descripción más probables de un texto OCR.
  * Estrategia multi-paso con alta tolerancia a errores de OCR.
  */
-function extraerDatosDeTexto(texto: string): { importe: string; descripcionExtraida: string; fechaExtraida: string } {
+function extraerDatosDeTexto(texto: string): { importe: string; descripcionExtraida: string; fechaExtraida: string; paisDetectado: Pais | null } {
   const lines = texto.split('\n').map(l => l.trim()).filter(l => l.length > 0)
 
   // ────────── 1. Buscar por keywords de TOTAL ──────────
@@ -267,7 +368,10 @@ function extraerDatosDeTexto(texto: string): { importe: string; descripcionExtra
     if (fechaExtraida) break
   }
 
-  return { importe: mejorImporteStr, descripcionExtraida, fechaExtraida }
+  // ────────── 6. Detectar país del ticket ──────────
+  const paisDetectado = detectarPais(texto)
+
+  return { importe: mejorImporteStr, descripcionExtraida, fechaExtraida, paisDetectado }
 }
 
 export default function NuevoGasto() {
@@ -292,6 +396,7 @@ export default function NuevoGasto() {
   const [ocrPreview, setOcrPreview] = useState<string | null>(null)
   const [ocrRawText, setOcrRawText] = useState<string | null>(null)
   const [showOcrResult, setShowOcrResult] = useState(false)
+  const [scannerOpen, setScannerOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const workerRef = useRef<Worker | null>(null)
 
@@ -322,7 +427,7 @@ export default function NuevoGasto() {
    * 2. Ejecutar Tesseract en español con parámetros optimizados
    * 3. Extraer datos inteligentemente del texto reconocido
    */
-  const procesarImagenOCR = async (file: File) => {
+  const procesarImagenOCR = async (source: File | Blob, previewUrl?: string) => {
     try {
       setOcrProcessing(true)
       setOcrProgress(0)
@@ -331,14 +436,18 @@ export default function NuevoGasto() {
       setShowOcrResult(false)
 
       // Crear preview de la imagen original
-      const reader = new FileReader()
-      reader.onload = (e) => setOcrPreview(e.target?.result as string)
-      reader.readAsDataURL(file)
+      if (previewUrl) {
+        setOcrPreview(previewUrl)
+      } else {
+        const reader = new FileReader()
+        reader.onload = (e) => setOcrPreview(e.target?.result as string)
+        reader.readAsDataURL(source)
+      }
 
       // Preprocesar la imagen (escala de grises + binarización Otsu)
       setOcrStatus('Mejorando imagen para lectura...')
       setOcrProgress(5)
-      const imagenProcesada = await preprocesarImagen(file)
+      const imagenProcesada = await preprocesarImagen(source)
 
       // Crear worker de Tesseract con español
       setOcrStatus('Iniciando reconocimiento...')
@@ -370,7 +479,7 @@ export default function NuevoGasto() {
       // Extraer datos del texto reconocido
       setOcrStatus('Extrayendo datos...')
       setOcrProgress(98)
-      const { importe: importeExtraido, descripcionExtraida, fechaExtraida } = extraerDatosDeTexto(text)
+      const { importe: importeExtraido, descripcionExtraida, fechaExtraida, paisDetectado } = extraerDatosDeTexto(text)
 
       if (importeExtraido) {
         setImporte(importeExtraido)
@@ -383,6 +492,10 @@ export default function NuevoGasto() {
       if (fechaExtraida) {
         setFecha(fechaExtraida)
         console.log('Fecha extraída:', fechaExtraida)
+      }
+      if (paisDetectado) {
+        setPais(paisDetectado)
+        console.log('País detectado:', paisDetectado)
       }
 
       setOcrProgress(100)
@@ -427,6 +540,12 @@ export default function NuevoGasto() {
     setOcrPreview(null)
     setOcrRawText(null)
     setShowOcrResult(false)
+  }
+
+  // Handler cuando el escáner captura una foto
+  const handleScannerCapture = (blob: Blob, previewUrl: string) => {
+    setScannerOpen(false)
+    procesarImagenOCR(blob, previewUrl)
   }
 
   // Calcular paso visual en tiempo real
@@ -544,20 +663,27 @@ export default function NuevoGasto() {
 
       <h1 className="text-lg font-semibold text-white mb-5">Nuevo Gasto</h1>
 
-      {/* Botón OCR - Escanear ticket */}
+      {/* Scanner de cámara en vivo */}
+      <TicketScanner
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onCapture={handleScannerCapture}
+      />
+
+      {/* Botones OCR - Escanear ticket */}
       <div className="mb-5">
         <input
           ref={fileInputRef}
           type="file"
           accept="image/*"
-          capture="environment"
           className="hidden"
           onChange={handleFileSelect}
         />
-        
+
+        {/* Botón principal: Abrir escáner */}
         <button
           type="button"
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => setScannerOpen(true)}
           disabled={ocrProcessing}
           className={`w-full glass-card p-4 flex items-center gap-3 transition-all active:scale-[0.98] ${
             ocrProcessing 
@@ -579,11 +705,23 @@ export default function NuevoGasto() {
             <p className="text-[11px] text-gray-500">
               {ocrProcessing 
                 ? (ocrStatus || `Procesando ${ocrProgress}%`)
-                : 'Sacá una foto al ticket y se completa automáticamente'
+                : 'Abrí la cámara para escanear el ticket'
               }
             </p>
           </div>
         </button>
+
+        {/* Botón secundario: Seleccionar de galería */}
+        {!ocrProcessing && (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full mt-2 py-2.5 px-4 flex items-center justify-center gap-2 text-gray-500 hover:text-gray-300 text-xs transition-colors"
+          >
+            <FaImage className="text-[10px]" />
+            <span>O seleccionar imagen de la galería</span>
+          </button>
+        )}
 
         {/* Barra de progreso OCR */}
         {ocrProcessing && (
