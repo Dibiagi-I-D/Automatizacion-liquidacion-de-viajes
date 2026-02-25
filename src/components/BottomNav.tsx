@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { FaMapMarkedAlt, FaPlus, FaFileAlt, FaSignOutAlt } from 'react-icons/fa'
+import { FaMapMarkedAlt, FaFileAlt, FaSignOutAlt } from 'react-icons/fa'
 import { useAuth } from '../context/AuthContext'
 
 export default function BottomNav() {
@@ -22,16 +22,6 @@ export default function BottomNav() {
         >
           <FaMapMarkedAlt className="text-lg mb-0.5" />
           <span className="text-[10px] font-medium tracking-wide">Viajes</span>
-        </NavLink>
-
-        <NavLink
-          to="/dashboard/nuevo-gasto"
-          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-        >
-          <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center -mt-1 mb-0.5">
-            <FaPlus className="text-white text-xs" />
-          </div>
-          <span className="text-[10px] font-medium tracking-wide">Gasto</span>
         </NavLink>
 
         <NavLink
