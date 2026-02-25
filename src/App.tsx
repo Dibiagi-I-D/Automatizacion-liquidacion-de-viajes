@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext'
 import { GastosProvider } from './context/GastosContext'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
+import AdminControl from './pages/AdminControl'
 import ProtectedRoute from './components/ProtectedRoute'
 
 function App() {
@@ -12,6 +13,7 @@ function App() {
         <GastosProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/admin" element={<AdminControl />} />
             <Route
               path="/dashboard/*"
               element={
