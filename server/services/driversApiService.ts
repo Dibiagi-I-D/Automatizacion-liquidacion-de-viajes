@@ -47,17 +47,23 @@ class DriversApiService {
   /**
    * GET /drivers/v1/active
    * Obtener todos los choferes activos
+   * API v2.0: Respuesta paginada { data: [...], pagination: {...} }
    * @param search - Parámetro opcional para buscar por nombre o legajo
    */
   async obtenerChoferesActivos(search?: string) {
     try {
-      const params = search ? { search } : {};
+      const params: any = { limit: 1000 };
+      if (search) params.search = search;
       const response = await this.api.get('/drivers/v1/active', { params });
+      
+      // API v2.0: la respuesta es { data: [...], pagination: {...} }
+      const registros = Array.isArray(response.data) ? response.data : (response.data?.data || []);
       
       return {
         success: true,
-        data: response.data,
-        total: Array.isArray(response.data) ? response.data.length : 0
+        data: registros,
+        total: registros.length,
+        pagination: response.data?.pagination || null
       };
     } catch (error: any) {
       console.error('Error al obtener choferes activos:', error.message);
@@ -248,17 +254,23 @@ class DriversApiService {
   /**
    * GET /vehicles/v1/tractors
    * Obtener todos los tractores activos
+   * API v2.0: Respuesta paginada { data: [...], pagination: {...} }
    * @param search - Parámetro opcional para buscar por patente o número interno
    */
   async obtenerTractoresActivos(search?: string) {
     try {
-      const params = search ? { search } : {};
+      const params: any = { limit: 1000 };
+      if (search) params.search = search;
       const response = await this.api.get('/vehicles/v1/tractors', { params });
+      
+      // API v2.0: la respuesta es { data: [...], pagination: {...} }
+      const registros = Array.isArray(response.data) ? response.data : (response.data?.data || []);
       
       return {
         success: true,
-        data: response.data,
-        total: Array.isArray(response.data) ? response.data.length : 0
+        data: registros,
+        total: registros.length,
+        pagination: response.data?.pagination || null
       };
     } catch (error: any) {
       console.error('Error al obtener tractores activos:', error.message);
@@ -298,17 +310,23 @@ class DriversApiService {
   /**
    * GET /trips/v1/roadmaps
    * Obtener hojas de ruta (viajes) activas
+   * API v2.0: Respuesta paginada { data: [...], pagination: {...} }
    * @param search - Parámetro opcional para buscar por número de viaje o nombre del chofer
    */
   async obtenerHojasDeRuta(search?: string) {
     try {
-      const params = search ? { search } : {};
+      const params: any = { limit: 1000 };
+      if (search) params.search = search;
       const response = await this.api.get('/trips/v1/roadmaps', { params });
+      
+      // API v2.0: la respuesta es { data: [...], pagination: {...} }
+      const registros = Array.isArray(response.data) ? response.data : (response.data?.data || []);
       
       return {
         success: true,
-        data: response.data,
-        total: response.data.length
+        data: registros,
+        total: registros.length,
+        pagination: response.data?.pagination || null
       };
     } catch (error: any) {
       if (error.response) {
