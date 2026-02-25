@@ -42,8 +42,8 @@ export default function NuevoGasto() {
   }, [nroViaje])
 
   /**
-   * OCR con Google Cloud Vision API (servidor)
-   * Envía la imagen al backend que usa Google Vision para máxima precisión.
+   * OCR con Gemini 1.5 Flash (servidor)
+   * Envía la imagen al backend que usa Gemini AI para máxima precisión.
    */
   const procesarImagenOCR = async (source: File | Blob, previewUrl?: string) => {
     try {
@@ -71,7 +71,7 @@ export default function NuevoGasto() {
       const base64DataUrl = await base64Promise
 
       // Enviar al backend
-      setOcrStatus('Analizando ticket con Google Vision...')
+      setOcrStatus('Analizando ticket con IA...')
       const response = await fetch(`${API_URL}/ocr/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
