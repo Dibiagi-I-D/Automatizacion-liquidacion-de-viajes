@@ -5,6 +5,7 @@ import authRoutes from './routes/auth.js'
 import gastosRoutes from './routes/gastos.js'
 import softlandRoutes from './routes/softland.js'
 import driversRoutes from './routes/drivers.js'
+import ocrRoutes from './routes/ocr.js'
 
 dotenv.config()
 
@@ -23,13 +24,14 @@ app.use(cors({
   origin: allowedOrigins,
   credentials: true
 }))
-app.use(express.json())
+app.use(express.json({ limit: '10mb' }))
 
 // Rutas
 app.use('/api/auth', authRoutes)
 app.use('/api/gastos', gastosRoutes)
 app.use('/api/softland', softlandRoutes)
 app.use('/api/drivers', driversRoutes)
+app.use('/api/ocr', ocrRoutes)
 
 // Health check
 app.get('/health', (req, res) => {
