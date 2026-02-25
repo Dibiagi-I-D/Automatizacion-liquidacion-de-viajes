@@ -3,8 +3,8 @@ import axios from 'axios'
 
 const router = Router()
 
-// Gemini 1.5 Flash — rápido, gratuito y multimodal
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
+// Gemini 2.5 Flash — rápido, gratuito y multimodal
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent'
 
 // ════════════════════════════════════════════
 // POST /api/ocr/scan
