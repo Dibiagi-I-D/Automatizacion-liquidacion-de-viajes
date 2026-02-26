@@ -42,7 +42,7 @@ Extraé los siguientes datos y devolvelos ÚNICAMENTE como JSON válido (sin mar
 
 {
   "importe": (número decimal del TOTAL a pagar, el monto final más importante del ticket. Si hay "TOTAL", usá ese valor. Solo el número, sin símbolo de moneda),
-  "fecha": (fecha en formato YYYY-MM-DD, o "" si no se encuentra),
+  "fecha": (fecha de EMISIÓN o de la TRANSACCIÓN en formato YYYY-MM-DD. IMPORTANTE: usá la fecha en que se realizó la compra/pago, NO la fecha de vencimiento, NO la fecha de CAI, NO la fecha de validez. Buscá palabras como "Fecha:", "Fecha emisión:", "Date:", o la fecha que aparece al inicio del ticket junto con la hora. Si hay varias fechas, elegí la más antigua que corresponda a cuándo se hizo la operación. Devolvé "" si no se encuentra),
   "pais": (código de país: "ARG" para Argentina, "CHL" para Chile, "URY" para Uruguay, o "" si no se puede determinar. Detectalo por CUIT/AFIP/IVA 21%=Argentina, RUT/SII/IVA 19%=Chile, RUC/DGI/IVA 22%=Uruguay),
   "descripcion": (nombre del comercio o establecimiento, máximo 120 caracteres, o ""),
   "tipoProducto": (TIPPRO: código del tipo de producto según la tabla de abajo. OBLIGATORIO, nunca vacío),
@@ -102,6 +102,7 @@ REGLAS DE CLASIFICACIÓN (OBLIGATORIAS):
 REGLAS DE EXTRACCIÓN:
 - El "importe" debe ser el TOTAL FINAL del ticket (total a pagar, no subtotales ni IVA por separado)
 - Si hay múltiples totales, elegí el más grande que represente el total a pagar
+- FECHA: Extraé ÚNICAMENTE la fecha de emisión/transacción (cuándo se pagó). IGNORÁ completamente: fechas de vencimiento, "Vto", "Venc", "Válido hasta", "CAI Vto", "Fecha CAI". Si el ticket tiene una fecha junto a la hora (ej: "15/03/2025 14:32"), esa es la fecha de la transacción. Si hay varias fechas, usá la que está al principio del ticket o junto a "Fecha:" / "Date:" / "Emisión:"
 - La fecha debe estar en formato YYYY-MM-DD
 - Para el país, basate en indicadores fiscales (CUIT, RUT, RUC, tipo de IVA, etc.)
 - Respondé SOLO con el JSON, nada más`
