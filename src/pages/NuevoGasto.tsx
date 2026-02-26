@@ -131,9 +131,9 @@ export default function NuevoGasto() {
         console.log('País detectado:', data.datos.pais)
       }
 
-      // Siempre completar tipo y código — si la IA no pudo clasificar, usar VARIOS/99
-      const tp = data.datos?.tipoProducto || 'VARIOS'
-      const ca = data.datos?.codigoArticulo ? String(data.datos.codigoArticulo) : '99'
+      // Siempre completar tipo y código — si la IA no pudo clasificar, usar TARIFA/14 (Gastos extras)
+      const tp = data.datos?.tipoProducto || 'TARIFA'
+      const ca = data.datos?.codigoArticulo ? String(data.datos.codigoArticulo) : '14'
       setTipoProducto(tp)
       setCodigoArticulo(ca)
       console.log('Concepto asignado:', tp, '/', ca)
@@ -503,9 +503,8 @@ export default function NuevoGasto() {
                   {tp === 'COMBLU' ? 'COMBLU — Combustibles y Lubricantes' :
                    tp === 'TARIFA' ? 'TARIFA — Tarifas y Peajes' :
                    tp === 'HONPRO' ? 'HONPRO — Honorarios Profesionales' :
-                   tp === 'REPUES' ? 'REPUES — Repuestos' :
-                   tp === 'VIATIC' ? 'VIATIC — Viáticos' :
-                   tp === 'VARIOS' ? 'VARIOS — Gastos Varios' :
+                   tp === 'NEUMAT' ? 'NEUMAT — Neumáticos' :
+                   tp === 'SERVIC' ? 'SERVIC — Servicios Generales' :
                    tp}
                 </option>
               ))}

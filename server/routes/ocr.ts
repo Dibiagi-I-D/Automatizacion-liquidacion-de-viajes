@@ -45,50 +45,59 @@ Extraé los siguientes datos y devolvelos ÚNICAMENTE como JSON válido (sin mar
   "fecha": (fecha en formato YYYY-MM-DD, o "" si no se encuentra),
   "pais": (código de país: "ARG" para Argentina, "CHL" para Chile, "URY" para Uruguay, o "" si no se puede determinar. Detectalo por CUIT/AFIP/IVA 21%=Argentina, RUT/SII/IVA 19%=Chile, RUC/DGI/IVA 22%=Uruguay),
   "descripcion": (nombre del comercio o establecimiento, máximo 120 caracteres, o ""),
-  "tipoProducto": (código del tipo de producto según la tabla de abajo, o ""),
-  "codigoArticulo": (código del artículo según la tabla de abajo, o ""),
+  "tipoProducto": (TIPPRO: código del tipo de producto según la tabla de abajo. OBLIGATORIO, nunca vacío),
+  "codigoArticulo": (ARTCOD: código del artículo según la tabla de abajo. OBLIGATORIO, nunca vacío),
   "textoCompleto": (todo el texto visible en el ticket, preservando saltos de línea)
 }
 
-TABLA DE CONCEPTOS PARA CLASIFICACIÓN:
-Usá esta tabla para mapear el contenido del ticket al tipoProducto y codigoArticulo correctos:
+CONTEXTO: Estás procesando tickets de gastos de una empresa de transporte de camiones (viajes internacionales ARG/CHL/URY).
 
-| tipoProducto | codigoArticulo | Descripción                  |
-|-------------|----------------|-------------------------------|
-| COMBLU      | 1              | Gasoil                        |
-| COMBLU      | 2              | Nafta                         |
-| COMBLU      | 3              | Lubricante                    |
-| COMBLU      | 4              | GNC                           |
-| COMBLU      | 5              | AdBlue / Urea                 |
-| TARIFA      | 5              | Peaje                         |
-| TARIFA      | 6              | Balanza                       |
-| TARIFA      | 7              | Gastos en Frontera            |
-| TARIFA      | 8              | Cruce de Frontera             |
-| TARIFA      | 9              | Estacionamiento               |
-| TARIFA      | 10             | Lavado de Unidad              |
-| HONPRO      | 2              | Despachante de Aduana         |
-| HONPRO      | 3              | Gestión Documental            |
-| REPUES      | 1              | Neumáticos / Cubiertas        |
-| REPUES      | 2              | Filtros                       |
-| REPUES      | 3              | Repuesto General              |
-| VIATIC      | 1              | Comida / Almuerzo / Cena      |
-| VIATIC      | 2              | Hotel / Alojamiento           |
-| VIATIC      | 3              | Viático General               |
-| VARIOS      | 1              | Teléfono / Comunicaciones     |
-| VARIOS      | 2              | Materiales de Limpieza        |
-| VARIOS      | 99             | Otro Gasto                    |
+TABLA DE REFERENCIA DE ARTÍCULOS ACTIVOS (ordenados por frecuencia de uso):
+TIPPRO   | ARTCOD | Descripción                        | U.M. | Palabras Clave                                         | Frecuencia
+TARIFA   | 2      | Entrada / Salida (Migraciones)     | UN   | migración, frontera, entrada, salida, paso fronterizo  | 5569
+TARIFA   | 5      | Peaje Argentino                    | UN   | peaje, autopista, ruta, tag, telepeaje                 | 4662
+TARIFA   | 10     | Desinfección                       | UN   | desinfección, sanitario, fumigación                    | 3434
+TARIFA   | 21     | Gastos en Frontera                 | UN   | frontera, comida en frontera, cambio, extras frontera  | 2574
+TARIFA   | 1      | Tunel Inter. Ruta Nac 7 Camión     | UN   | túnel, ruta 7, cristo redentor                         | 1843
+HONPRO   | 6      | Honorarios Profesionales           | UN   | honorarios, profesional, gestión                       | 478
+HONPRO   | 4      | ATA - Agente Transporte Aduanero   | UN   | ata, agente aduanero, despachante                      | 224
+NEUMAT   | 3      | Pinchadura y Rotación              | UN   | neumático, cubierta, rotación, pinchadura              | 157
+TARIFA   | 14     | Gastos extras (Caja Camión)        | UN   | caja camión, varios, extras, misceláneos               | 245
+TARIFA   | 12     | Viaticos Chofer                    | UN   | viático, comida, almuerzo, cena, alojamiento, estadía  | 120
+TARIFA   | 3      | Entrada / Salida (Aduana)          | UN   | aduana, dga, afip, control aduanero                    | 77
+TARIFA   | 7      | Iscamen - Control Sanitario        | UN   | iscamen, control sanitario, barrera                    | 41
+NEUMAT   | 1      | Pinchadura                         | UN   | pinchadura, pinchazo, reparación neumático             | 37
+NEUMAT   | 2      | Rotación                           | UN   | rotación, balanceo                                     | 30
+TARIFA   | 8      | Sellados                           | UN   | sellado, tasa, timbre                                  | 22
+TARIFA   | 4      | Peaje Chileno                      | UN   | peaje chile, tag chile, ruta chile                     | 20
+HONPRO   | 2      | Gestiones Aduaneras                | UN   | gestión aduanera, trámite                              | 12
+TARIFA   | 6      | Peaje Uruguayo                     | UN   | peaje uruguay, ruta uruguay                            | 5
+TARIFA   | 13     | Estacionamiento / Aparcadero       | UN   | estacionamiento, parking, aparcadero                   | 5
+TARIFA   | 11     | Senasa                             | UN   | senasa, sanidad vegetal                                | 2
+SERVIC   | 3      | Falso Flete                        | UN   | falso flete                                            | 2
+HONPRO   | 5      | Alquiler Predio Docwell            | UN   | alquiler, predio, docwell                              | 2
+HONPRO   | 3      | Servicios Aduaneros                | UN   | servicio aduanero                                      | 1
+COMBLU   | 3      | Urea 32% Adblue                    | LT   | urea, adblue, def                                      | 1
+COMBLU   | 9      | Aceite Hidraulico Dexron II         | LT   | aceite, lubricante, dexron                              | 1
 
-REGLAS DE CLASIFICACIÓN:
-- NUNCA uses HONPRO con codigoArticulo "1" (está obsoleto)
-- Si el ticket dice "Peaje" o "Toll", usá TARIFA/5
-- Si el ticket dice "Gasoil", "Diesel", "Gas Oil", usá COMBLU/1
-- Si el ticket dice "Nafta", "Bencina", "Gasolina", usá COMBLU/2
-- Si es un restaurante, bar, comida, usá VIATIC/1
-- Si es un hotel, hostel, alojamiento, usá VIATIC/2
-- Si es una gomería, cubierta, neumático, usá REPUES/1
-- Si es una estación de servicio o expendedora de combustible, usá COMBLU/1
-- Si es un lavadero de vehículos, usá TARIFA/10
-- IMPORTANTE: SIEMPRE debés clasificar el ticket. Si no podés determinar la categoría exacta, usá VARIOS/99 como fallback. NUNCA dejes tipoProducto ni codigoArticulo vacíos.
+REGLAS DE CLASIFICACIÓN (OBLIGATORIAS):
+1. NUNCA uses HONPRO con ARTCOD "1" — está OBSOLETO.
+2. Si el ticket dice "Peaje", "autopista", "tag", "telepeaje" → TARIFA/5 (peaje argentino). Si es de Chile → TARIFA/4. Si es de Uruguay → TARIFA/6.
+3. Si dice "migración", "entrada", "salida", "paso fronterizo" → TARIFA/2.
+4. Si dice "desinfección", "sanitario", "fumigación" → TARIFA/10.
+5. Si dice "túnel", "ruta 7", "cristo redentor" → TARIFA/1.
+6. Si es comida, restaurante, almuerzo, cena, viático → TARIFA/12 (Viáticos Chofer).
+7. Si dice "frontera" y son gastos varios en la frontera (no migración ni aduana) → TARIFA/21.
+8. Si dice "aduana", "DGA", "AFIP", "control aduanero" → TARIFA/3.
+9. Si dice "iscamen", "control sanitario" → TARIFA/7.
+10. Si dice "neumático", "cubierta", "pinchadura" → NEUMAT/3.
+11. Si dice "urea", "adblue" → COMBLU/3.
+12. Si dice "aceite", "lubricante" → COMBLU/9.
+13. Si dice "honorarios", "gestor" → HONPRO/6.
+14. Si dice "ATA", "agente aduanero", "despachante" → HONPRO/4.
+15. Si el ticket menciona litros (LT), SOLO puede ser COMBLU.
+16. Si hay ambigüedad entre dos opciones, priorizá la de mayor frecuencia.
+17. FALLBACK: Si no hay coincidencia clara, usá TARIFA/14 (Gastos extras). NUNCA dejes tipoProducto ni codigoArticulo vacíos.
 
 REGLAS DE EXTRACCIÓN:
 - El "importe" debe ser el TOTAL FINAL del ticket (total a pagar, no subtotales ni IVA por separado)
