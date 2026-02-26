@@ -6,6 +6,49 @@ const router = Router()
 const prisma = new PrismaClient()
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-super-seguro-cambiar-en-produccion'
 
+// Usuarios administrativos (en el futuro se puede mover a la BD)
+const ADMIN_USERS = [
+  { usuario: 'veronica', password: 'veronica', nombre: 'Verónica', rol: 'admin' },
+]
+
+// POST /api/auth/admin-login
+router.post('/admin-login', async (req, res) => {
+  try {
+    const { usuario, password } = req.body
+
+    if (!usuario || !password) {
+      return res.status(400).json({ success: false, message: 'Usuario y contraseña son requeridos' })
+    }
+
+    const admin = ADMIN_USERS.find(
+      u => u.usuario.toLowerCase() === usuario.toLowerCase() && u.password === password
+    )
+
+    if (!admin) {
+      return res.status(401).json({ success: false, message: 'Credenciales incorrectas' })
+    }
+
+    const token = jwt.sign(
+      { usuario: admin.usuario, nombre: admin.nombre, rol: admin.rol },
+      JWT_SECRET,
+      { expiresIn: '8h' }
+    )
+
+    res.json({
+      success: true,
+      token,
+      admin: {
+        usuario: admin.usuario,
+        nombre: admin.nombre,
+        rol: admin.rol,
+      },
+    })
+  } catch (error) {
+    console.error('Error en admin-login:', error)
+    res.status(500).json({ success: false, message: 'Error al iniciar sesión' })
+  }
+})
+
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {

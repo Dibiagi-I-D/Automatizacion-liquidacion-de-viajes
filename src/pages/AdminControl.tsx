@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { BANDERAS, NOMBRES_PAIS, Pais, TipoGasto, NOMBRES_TIPO } from '../types'
-import { FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck, FaChevronDown, FaChevronUp, FaSearch, FaClipboardCheck, FaExclamationTriangle, FaTrailer, FaFileExport } from 'react-icons/fa'
+import { FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck, FaChevronDown, FaChevronUp, FaSearch, FaClipboardCheck, FaExclamationTriangle, FaTrailer, FaFileExport, FaSignOutAlt } from 'react-icons/fa'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
@@ -40,6 +41,7 @@ interface RendicionAprobada {
 type EstadoRendicion = 'pendiente' | 'aprobado'
 
 export default function AdminControl() {
+  const navigate = useNavigate()
   const [hojasDeRuta, setHojasDeRuta] = useState<HojaDeRuta[]>([])
   const [gastos, setGastos] = useState<Gasto[]>([])
   const [aprobaciones, setAprobaciones] = useState<Record<number, RendicionAprobada>>({})
@@ -49,6 +51,15 @@ export default function AdminControl() {
   const [expandedViaje, setExpandedViaje] = useState<number | null>(null)
   const [filtroEstado, setFiltroEstado] = useState<'todos' | 'pendiente' | 'aprobado'>('todos')
   const [aprobando, setAprobando] = useState<number | null>(null)
+
+  // Datos del admin logueado
+  const adminData = JSON.parse(sessionStorage.getItem('admin_user') || '{}')
+
+  const handleLogout = () => {
+    sessionStorage.removeItem('admin_token')
+    sessionStorage.removeItem('admin_user')
+    navigate('/admin/login')
+  }
 
   useEffect(() => {
     cargarDatos()
@@ -60,24 +71,26 @@ export default function AdminControl() {
       setError('')
 
       // Cargar hojas de ruta de la API
-      const response = await fetch(`${API_URL}/drivers/roadmaps-public`)
-      if (!response.ok) throw new Error('Error al cargar hojas de ruta')
+      const resHojas = await fetch(`${API_URL}/drivers/roadmaps-public`)
+      if (!resHojas.ok) throw new Error('Error al cargar hojas de ruta')
       
-      const data = await response.json()
-      if (data.success) {
-        setHojasDeRuta(data.data || [])
+      const dataHojas = await resHojas.json()
+      if (dataHojas.success) {
+        setHojasDeRuta(dataHojas.data || [])
       }
 
-      // Cargar gastos de localStorage
-      const gastosGuardados = localStorage.getItem('gastos_viajes')
-      if (gastosGuardados) {
-        setGastos(JSON.parse(gastosGuardados))
+      // Cargar gastos del servidor
+      const resGastos = await fetch(`${API_URL}/gastos-viaje`)
+      if (resGastos.ok) {
+        const dataGastos = await resGastos.json()
+        setGastos(dataGastos.data || [])
       }
 
-      // Cargar aprobaciones de localStorage
-      const aprobacionesGuardadas = localStorage.getItem('rendiciones_aprobadas')
-      if (aprobacionesGuardadas) {
-        setAprobaciones(JSON.parse(aprobacionesGuardadas))
+      // Cargar aprobaciones del servidor
+      const resAprob = await fetch(`${API_URL}/gastos-viaje/aprobaciones/todas`)
+      if (resAprob.ok) {
+        const dataAprob = await resAprob.json()
+        setAprobaciones(dataAprob.data || {})
       }
 
     } catch (err: any) {
@@ -123,42 +136,54 @@ export default function AdminControl() {
     return (gastosPorViaje[nroViaje] || []).reduce((sum, g) => sum + g.importe, 0)
   }
 
-  const aprobarRendicion = (hoja: HojaDeRuta) => {
+  const aprobarRendicion = async (hoja: HojaDeRuta) => {
     if (!confirm(`¿Aprobar la rendición del Viaje ${hoja.Nro_Viaje}?\n\nChofer: ${hoja.Nombre_Chofer}\nTotal: $ ${formatImporte(totalViaje(hoja.Nro_Viaje))}\n\nEsto enviará los datos a producción.`)) {
       return
     }
 
     setAprobando(hoja.Nro_Viaje)
 
-    // Simular un pequeño delay para UX
-    setTimeout(() => {
+    try {
       const gastosDelViaje = gastosPorViaje[hoja.Nro_Viaje] || []
       
-      const nuevaAprobacion: RendicionAprobada = {
-        nroViaje: hoja.Nro_Viaje,
-        aprobadoPor: 'Administrador',
-        fechaAprobacion: new Date().toISOString(),
-        gastos: gastosDelViaje,
-        totalImporte: totalViaje(hoja.Nro_Viaje),
-        chofer: hoja.Nombre_Chofer,
-        patenteTractor: hoja.Patente_Tractor,
+      const res = await fetch(`${API_URL}/gastos-viaje/aprobaciones/${hoja.Nro_Viaje}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aprobadoPor: adminData.nombre || 'Administrador',
+          gastos: gastosDelViaje,
+          totalImporte: totalViaje(hoja.Nro_Viaje),
+          chofer: hoja.Nombre_Chofer,
+          patenteTractor: hoja.Patente_Tractor,
+        })
+      })
+
+      if (res.ok) {
+        const data = await res.json()
+        setAprobaciones(prev => ({ ...prev, [hoja.Nro_Viaje]: data.data }))
       }
-
-      const nuevasAprobaciones = { ...aprobaciones, [hoja.Nro_Viaje]: nuevaAprobacion }
-      setAprobaciones(nuevasAprobaciones)
-      localStorage.setItem('rendiciones_aprobadas', JSON.stringify(nuevasAprobaciones))
-
+    } catch (err) {
+      console.error('Error al aprobar rendición:', err)
+    } finally {
       setAprobando(null)
-    }, 800)
+    }
   }
 
-  const revocarAprobacion = (nroViaje: number) => {
+  const revocarAprobacion = async (nroViaje: number) => {
     if (!confirm(`¿Revocar la aprobación del Viaje ${nroViaje}? Volverá a estado pendiente.`)) return
 
-    const nuevasAprobaciones = { ...aprobaciones }
-    delete nuevasAprobaciones[nroViaje]
-    setAprobaciones(nuevasAprobaciones)
-    localStorage.setItem('rendiciones_aprobadas', JSON.stringify(nuevasAprobaciones))
+    try {
+      const res = await fetch(`${API_URL}/gastos-viaje/aprobaciones/${nroViaje}`, { method: 'DELETE' })
+      if (res.ok) {
+        setAprobaciones(prev => {
+          const nuevas = { ...prev }
+          delete nuevas[nroViaje]
+          return nuevas
+        })
+      }
+    } catch (err) {
+      console.error('Error al revocar aprobación:', err)
+    }
   }
 
   // Estadísticas
@@ -199,8 +224,18 @@ export default function AdminControl() {
                 </p>
               </div>
             </div>
-            <div className="text-[10px] font-medium text-gray-600 uppercase tracking-wider">
-              Administración
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <FaUser className="text-[10px]" />
+                <span>{adminData.nombre || 'Admin'}</span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-gray-500 hover:text-red-400 hover:bg-red-500/[0.06] border border-white/[0.06] transition-all"
+              >
+                <FaSignOutAlt className="text-[10px]" />
+                Salir
+              </button>
             </div>
           </div>
         </div>

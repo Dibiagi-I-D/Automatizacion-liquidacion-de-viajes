@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { FaTruck, FaSpinner, FaMapMarkedAlt, FaCalendarAlt, FaCheckCircle, FaClock, FaPlus, FaUser, FaTrailer } from 'react-icons/fa'
 import { useAuth } from '../context/AuthContext'
 
+const API_URL = import.meta.env.VITE_API_URL || '/api'
+
 interface HojaDeRuta {
   Cod_Empresa: string
   Nro_Viaje: number
@@ -24,17 +26,20 @@ export default function HojasDeRuta() {
   const [searchQuery, setSearchQuery] = useState('')
   const [gastosCount, setGastosCount] = useState<Record<number, number>>({})
 
-  // Cargar conteo de gastos desde localStorage
+  // Cargar conteo de gastos desde el servidor
   useEffect(() => {
-    const gastosGuardados = localStorage.getItem('gastos_viajes')
-    if (gastosGuardados) {
-      const gastos = JSON.parse(gastosGuardados)
-      const counts: Record<number, number> = {}
-      gastos.forEach((gasto: any) => {
-        counts[gasto.nroViaje] = (counts[gasto.nroViaje] || 0) + 1
+    fetch(`${API_URL}/gastos-viaje`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          const counts: Record<number, number> = {}
+          data.data.forEach((gasto: any) => {
+            counts[gasto.nroViaje] = (counts[gasto.nroViaje] || 0) + 1
+          })
+          setGastosCount(counts)
+        }
       })
-      setGastosCount(counts)
-    }
+      .catch(() => {})
   }, [hojasDeRuta])
 
   useEffect(() => {

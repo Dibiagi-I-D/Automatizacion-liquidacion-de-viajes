@@ -1,6 +1,7 @@
 import { useState, FormEvent, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useGastos } from '../context/GastosContext'
+import { useAuth } from '../context/AuthContext'
 import { Pais, TipoGasto, BANDERAS, NOMBRES_PAIS, NOMBRES_TIPO, calcularPasoVisual } from '../types'
 import { FaCheck, FaSpinner, FaArrowLeft, FaReceipt, FaCamera, FaTimes, FaImage } from 'react-icons/fa'
 
@@ -9,7 +10,8 @@ const API_URL = import.meta.env.VITE_API_URL || '/api'
 export default function NuevoGasto() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { agregarGasto, loading } = useGastos()
+  const { chofer } = useAuth()
+  const { loading } = useGastos()
   
   const nroViaje = searchParams.get('viaje')
   
@@ -29,15 +31,15 @@ export default function NuevoGasto() {
   const [showOcrResult, setShowOcrResult] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Contar gastos del viaje actual al cargar
+  // Contar gastos del viaje actual al cargar (desde el servidor)
   useEffect(() => {
     if (nroViaje) {
-      const gastosGuardados = localStorage.getItem('gastos_viajes')
-      if (gastosGuardados) {
-        const gastos = JSON.parse(gastosGuardados)
-        const gastosDelViaje = gastos.filter((g: any) => g.nroViaje === parseInt(nroViaje))
-        setGastosCount(gastosDelViaje.length)
-      }
+      fetch(`${API_URL}/gastos-viaje/${nroViaje}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) setGastosCount(data.total || 0)
+        })
+        .catch(() => {})
     }
   }, [nroViaje])
 
@@ -162,30 +164,26 @@ export default function NuevoGasto() {
     }
 
     try {
-      // Crear objeto de gasto
-      const nuevoGasto = {
-        id: Date.now().toString(),
-        nroViaje: parseInt(nroViaje),
-        fecha: new Date(fecha).toISOString(),
-        pais,
-        tipo,
-        importe: importeNum,
-        descripcion: descripcion.trim() || undefined,
-        createdAt: new Date().toISOString()
-      }
+      // Enviar gasto al servidor
+      const response = await fetch(`${API_URL}/gastos-viaje`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nroViaje: parseInt(nroViaje),
+          fecha: new Date(fecha).toISOString(),
+          pais,
+          tipo,
+          importe: importeNum,
+          descripcion: descripcion.trim() || undefined,
+          chofer: (chofer as any)?.nombreCompleto || '',
+          patenteTractor: chofer?.interno || '',
+        })
+      })
 
-      // Obtener gastos existentes del localStorage
-      const gastosGuardados = localStorage.getItem('gastos_viajes')
-      const gastos = gastosGuardados ? JSON.parse(gastosGuardados) : []
-      
-      // Agregar nuevo gasto
-      gastos.push(nuevoGasto)
-      
-      // Guardar en localStorage
-      localStorage.setItem('gastos_viajes', JSON.stringify(gastos))
+      const data = await response.json()
+      if (!data.success) throw new Error(data.error || 'Error al guardar')
 
-      console.log('✅ Gasto guardado en localStorage:', nuevoGasto)
-      console.log('📊 Total de gastos:', gastos.length)
+      console.log('Gasto guardado en servidor:', data.data)
 
       // Actualizar contador de gastos del viaje
       setGastosCount(gastosCount + 1)

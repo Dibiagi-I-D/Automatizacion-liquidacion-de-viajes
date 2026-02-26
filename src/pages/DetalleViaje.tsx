@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import { FaTruck, FaSpinner, FaCalendarAlt, FaCheckCircle, FaClock, FaArrowLeft, FaTrash, FaPlus, FaUser, FaTrailer } from 'react-icons/fa'
 import { BANDERAS, NOMBRES_TIPO, Pais, TipoGasto } from '../types'
 
+const API_URL = import.meta.env.VITE_API_URL || '/api'
+
 interface HojaDeRuta {
   Cod_Empresa: string
   Nro_Viaje: number
@@ -63,24 +65,28 @@ export default function DetalleViaje() {
     }
   }
 
-  const cargarGastosDelViaje = () => {
-    const gastosGuardados = localStorage.getItem('gastos_viajes')
-    if (gastosGuardados) {
-      const todosLosGastos: Gasto[] = JSON.parse(gastosGuardados)
-      const gastosViaje = todosLosGastos.filter(g => g.nroViaje.toString() === nroViaje)
-      setGastos(gastosViaje)
+  const cargarGastosDelViaje = async () => {
+    try {
+      const res = await fetch(`${API_URL}/gastos-viaje/${nroViaje}`)
+      if (res.ok) {
+        const data = await res.json()
+        setGastos(data.data || [])
+      }
+    } catch (err) {
+      console.error('Error al cargar gastos del viaje:', err)
     }
   }
 
-  const eliminarGasto = (gastoId: string) => {
+  const eliminarGasto = async (gastoId: string) => {
     if (!confirm('¿Estás seguro de eliminar este gasto?')) return
     
-    const gastosGuardados = localStorage.getItem('gastos_viajes')
-    if (gastosGuardados) {
-      const todosLosGastos: Gasto[] = JSON.parse(gastosGuardados)
-      const gastosActualizados = todosLosGastos.filter(g => g.id !== gastoId)
-      localStorage.setItem('gastos_viajes', JSON.stringify(gastosActualizados))
-      cargarGastosDelViaje()
+    try {
+      const res = await fetch(`${API_URL}/gastos-viaje/${gastoId}`, { method: 'DELETE' })
+      if (res.ok) {
+        cargarGastosDelViaje()
+      }
+    } catch (err) {
+      console.error('Error al eliminar gasto:', err)
     }
   }
 

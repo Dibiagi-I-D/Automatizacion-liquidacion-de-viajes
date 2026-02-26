@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import { FaTruck, FaSpinner, FaCalendarAlt, FaCheckCircle, FaClock, FaEye, FaChevronRight } from 'react-icons/fa'
 import { BANDERAS, NOMBRES_TIPO, Pais, TipoGasto } from '../types'
 
+const API_URL = import.meta.env.VITE_API_URL || '/api'
+
 interface HojaDeRuta {
   Cod_Empresa: string
   Nro_Viaje: number
@@ -43,22 +45,26 @@ export default function Rendicion() {
   }, [])
 
   const cargarGastos = () => {
-    const gastosGuardados = localStorage.getItem('gastos_viajes')
-    if (gastosGuardados) {
-      const gastosData: Gasto[] = JSON.parse(gastosGuardados)
-      setGastos(gastosData)
-      
-      const counts: Record<number, number> = {}
-      const totales: Record<number, number> = {}
-      
-      gastosData.forEach((gasto) => {
-        counts[gasto.nroViaje] = (counts[gasto.nroViaje] || 0) + 1
-        totales[gasto.nroViaje] = (totales[gasto.nroViaje] || 0) + gasto.importe
+    fetch(`${API_URL}/gastos-viaje`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          const gastosData: Gasto[] = data.data
+          setGastos(gastosData)
+          
+          const counts: Record<number, number> = {}
+          const totales: Record<number, number> = {}
+          
+          gastosData.forEach((gasto) => {
+            counts[gasto.nroViaje] = (counts[gasto.nroViaje] || 0) + 1
+            totales[gasto.nroViaje] = (totales[gasto.nroViaje] || 0) + gasto.importe
+          })
+          
+          setGastosCount(counts)
+          setTotalesPorViaje(totales)
+        }
       })
-      
-      setGastosCount(counts)
-      setTotalesPorViaje(totales)
-    }
+      .catch(() => {})
   }
 
   const cargarHojasDeRuta = async () => {
