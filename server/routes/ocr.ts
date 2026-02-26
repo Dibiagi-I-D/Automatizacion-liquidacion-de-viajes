@@ -35,8 +35,8 @@ router.post('/scan', async (req: Request, res: Response) => {
     console.log('[OCR] Enviando imagen a Gemini 1.5 Flash...')
     console.log(`[OCR] Tamaño base64: ${(base64Image.length / 1024).toFixed(0)} KB`)
 
-    // Prompt optimizado para extracción de datos de tickets
-    const prompt = `Analizá esta imagen de un ticket/factura/recibo/comprobante de pago.
+    // Prompt optimizado para extracción de datos de tickets + clasificación Softland
+    const prompt = `Analizá esta imagen de un ticket/factura/recibo/comprobante de pago de una empresa de transporte de camiones.
 
 Extraé los siguientes datos y devolvelos ÚNICAMENTE como JSON válido (sin markdown, sin \`\`\`, solo el JSON):
 
@@ -45,10 +45,52 @@ Extraé los siguientes datos y devolvelos ÚNICAMENTE como JSON válido (sin mar
   "fecha": (fecha en formato YYYY-MM-DD, o "" si no se encuentra),
   "pais": (código de país: "ARG" para Argentina, "CHL" para Chile, "URY" para Uruguay, o "" si no se puede determinar. Detectalo por CUIT/AFIP/IVA 21%=Argentina, RUT/SII/IVA 19%=Chile, RUC/DGI/IVA 22%=Uruguay),
   "descripcion": (nombre del comercio o establecimiento, máximo 120 caracteres, o ""),
+  "tipoProducto": (código del tipo de producto según la tabla de abajo, o ""),
+  "codigoArticulo": (código del artículo según la tabla de abajo, o ""),
   "textoCompleto": (todo el texto visible en el ticket, preservando saltos de línea)
 }
 
-REGLAS IMPORTANTES:
+TABLA DE CONCEPTOS PARA CLASIFICACIÓN:
+Usá esta tabla para mapear el contenido del ticket al tipoProducto y codigoArticulo correctos:
+
+| tipoProducto | codigoArticulo | Descripción                  |
+|-------------|----------------|-------------------------------|
+| COMBLU      | 1              | Gasoil                        |
+| COMBLU      | 2              | Nafta                         |
+| COMBLU      | 3              | Lubricante                    |
+| COMBLU      | 4              | GNC                           |
+| COMBLU      | 5              | AdBlue / Urea                 |
+| TARIFA      | 5              | Peaje                         |
+| TARIFA      | 6              | Balanza                       |
+| TARIFA      | 7              | Gastos en Frontera            |
+| TARIFA      | 8              | Cruce de Frontera             |
+| TARIFA      | 9              | Estacionamiento               |
+| TARIFA      | 10             | Lavado de Unidad              |
+| HONPRO      | 2              | Despachante de Aduana         |
+| HONPRO      | 3              | Gestión Documental            |
+| REPUES      | 1              | Neumáticos / Cubiertas        |
+| REPUES      | 2              | Filtros                       |
+| REPUES      | 3              | Repuesto General              |
+| VIATIC      | 1              | Comida / Almuerzo / Cena      |
+| VIATIC      | 2              | Hotel / Alojamiento           |
+| VIATIC      | 3              | Viático General               |
+| VARIOS      | 1              | Teléfono / Comunicaciones     |
+| VARIOS      | 2              | Materiales de Limpieza        |
+| VARIOS      | 99             | Otro Gasto                    |
+
+REGLAS DE CLASIFICACIÓN:
+- NUNCA uses HONPRO con codigoArticulo "1" (está obsoleto)
+- Si el ticket dice "Peaje" o "Toll", usá TARIFA/5
+- Si el ticket dice "Gasoil", "Diesel", "Gas Oil", usá COMBLU/1
+- Si el ticket dice "Nafta", "Bencina", "Gasolina", usá COMBLU/2
+- Si es un restaurante, bar, comida, usá VIATIC/1
+- Si es un hotel, hostel, alojamiento, usá VIATIC/2
+- Si es una gomería, cubierta, neumático, usá REPUES/1
+- Si es una estación de servicio o expendedora de combustible, usá COMBLU/1
+- Si es un lavadero de vehículos, usá TARIFA/10
+- IMPORTANTE: SIEMPRE debés clasificar el ticket. Si no podés determinar la categoría exacta, usá VARIOS/99 como fallback. NUNCA dejes tipoProducto ni codigoArticulo vacíos.
+
+REGLAS DE EXTRACCIÓN:
 - El "importe" debe ser el TOTAL FINAL del ticket (total a pagar, no subtotales ni IVA por separado)
 - Si hay múltiples totales, elegí el más grande que represente el total a pagar
 - La fecha debe estar en formato YYYY-MM-DD
@@ -139,6 +181,8 @@ REGLAS IMPORTANTES:
       fecha: datos.fecha || '',
       pais: datos.pais || '',
       descripcion: datos.descripcion || '',
+      tipoProducto: datos.tipoProducto || '',
+      codigoArticulo: datos.codigoArticulo ? String(datos.codigoArticulo) : '',
     }
 
     const rawText = datos.textoCompleto || geminiText
@@ -147,7 +191,9 @@ REGLAS IMPORTANTES:
       importe: resultado.importe,
       fecha: resultado.fecha,
       pais: resultado.pais,
-      descripcion: resultado.descripcion?.substring(0, 50)
+      descripcion: resultado.descripcion?.substring(0, 50),
+      tipoProducto: resultado.tipoProducto,
+      codigoArticulo: resultado.codigoArticulo
     })
 
     return res.json({

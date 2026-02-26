@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { FaTruck, FaSpinner, FaCalendarAlt, FaCheckCircle, FaClock, FaArrowLeft, FaTrash, FaPlus, FaUser, FaTrailer } from 'react-icons/fa'
-import { BANDERAS, NOMBRES_TIPO, Pais, TipoGasto } from '../types'
+import { BANDERAS, Pais } from '../types'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
@@ -23,7 +23,9 @@ interface Gasto {
   nroViaje: number
   fecha: string
   pais: Pais
-  tipo: TipoGasto
+  tipo: string
+  tipoProducto: string
+  codigoArticulo: string
   importe: number
   descripcion?: string
   createdAt: string
@@ -250,8 +252,13 @@ export default function DetalleViaje() {
                   <span className="text-2xl leading-none mt-0.5">{BANDERAS[gasto.pais]}</span>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-white">
-                      {NOMBRES_TIPO[gasto.tipo]}
+                      {gasto.tipo}
                     </p>
+                    {gasto.tipoProducto && gasto.codigoArticulo && (
+                      <p className="text-[10px] text-gray-600 font-mono">
+                        {gasto.tipoProducto}/{gasto.codigoArticulo}
+                      </p>
+                    )}
                     <p className="text-xs text-gray-500 mt-0.5">
                       {formatFecha(gasto.fecha)}
                     </p>

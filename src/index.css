@@ -93,6 +93,17 @@ body {
     font-size: 16px;
   }
 
+  select.input-field {
+    background-color: rgba(255, 255, 255, 0.04);
+    color: #fff;
+  }
+
+  select.input-field option {
+    background-color: #1a1b23;
+    color: #e5e7eb;
+    padding: 8px;
+  }
+
   .badge {
     @apply inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium;
   }

@@ -2,10 +2,17 @@ import { useState, FormEvent, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useGastos } from '../context/GastosContext'
 import { useAuth } from '../context/AuthContext'
-import { Pais, TipoGasto, BANDERAS, NOMBRES_PAIS, NOMBRES_TIPO, calcularPasoVisual } from '../types'
+import { Pais, BANDERAS, NOMBRES_PAIS, calcularPasoVisual } from '../types'
 import { FaCheck, FaSpinner, FaArrowLeft, FaReceipt, FaCamera, FaTimes, FaImage } from 'react-icons/fa'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
+
+interface ConceptoSoftland {
+  tipoProducto: string
+  codigoArticulo: string
+  descripcion: string
+  unidadMedida: string
+}
 
 export default function NuevoGasto() {
   const navigate = useNavigate()
@@ -17,11 +24,16 @@ export default function NuevoGasto() {
   
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0])
   const [pais, setPais] = useState<Pais>('ARG')
-  const [tipo, setTipo] = useState<TipoGasto>('COMBUSTIBLE')
+  const [tipoProducto, setTipoProducto] = useState('')
+  const [codigoArticulo, setCodigoArticulo] = useState('')
   const [importe, setImporte] = useState('')
   const [descripcion, setDescripcion] = useState('')
   const [showSuccess, setShowSuccess] = useState(false)
   const [gastosCount, setGastosCount] = useState(0)
+
+  // Conceptos Softland
+  const [conceptos, setConceptos] = useState<ConceptoSoftland[]>([])
+  const [loadingConceptos, setLoadingConceptos] = useState(true)
 
   // Estados para OCR (Google Cloud Vision)
   const [ocrProcessing, setOcrProcessing] = useState(false)
@@ -42,6 +54,17 @@ export default function NuevoGasto() {
         .catch(() => {})
     }
   }, [nroViaje])
+
+  // Cargar conceptos Softland
+  useEffect(() => {
+    fetch(`${API_URL}/conceptos`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) setConceptos(data.data || [])
+      })
+      .catch(() => console.error('Error al cargar conceptos'))
+      .finally(() => setLoadingConceptos(false))
+  }, [])
 
   /**
    * OCR con Gemini 1.5 Flash (servidor)
@@ -95,7 +118,7 @@ export default function NuevoGasto() {
         setImporte(data.datos.importe)
         console.log('Importe extraído:', data.datos.importe)
       }
-      if (data.datos?.descripcion && !descripcion) {
+      if (data.datos?.descripcion) {
         setDescripcion(data.datos.descripcion)
         console.log('Descripción extraída:', data.datos.descripcion)
       }
@@ -107,6 +130,13 @@ export default function NuevoGasto() {
         setPais(data.datos.pais as Pais)
         console.log('País detectado:', data.datos.pais)
       }
+
+      // Siempre completar tipo y código — si la IA no pudo clasificar, usar VARIOS/99
+      const tp = data.datos?.tipoProducto || 'VARIOS'
+      const ca = data.datos?.codigoArticulo ? String(data.datos.codigoArticulo) : '99'
+      setTipoProducto(tp)
+      setCodigoArticulo(ca)
+      console.log('Concepto asignado:', tp, '/', ca)
 
       setShowOcrResult(true)
 
@@ -164,6 +194,11 @@ export default function NuevoGasto() {
     }
 
     try {
+      // Obtener la descripción del concepto seleccionado
+      const conceptoSeleccionado = conceptos.find(
+        c => c.tipoProducto === tipoProducto && c.codigoArticulo === codigoArticulo
+      )
+
       // Enviar gasto al servidor
       const response = await fetch(`${API_URL}/gastos-viaje`, {
         method: 'POST',
@@ -172,7 +207,9 @@ export default function NuevoGasto() {
           nroViaje: parseInt(nroViaje),
           fecha: new Date(fecha).toISOString(),
           pais,
-          tipo,
+          tipo: conceptoSeleccionado?.descripcion || tipoProducto || 'Sin clasificar',
+          tipoProducto,
+          codigoArticulo,
           importe: importeNum,
           descripcion: descripcion.trim() || undefined,
           chofer: (chofer as any)?.nombreCompleto || '',
@@ -191,6 +228,8 @@ export default function NuevoGasto() {
       // Limpiar solo los campos del formulario (mantener fecha)
       setImporte('')
       setDescripcion('')
+      setTipoProducto('')
+      setCodigoArticulo('')
       setShowSuccess(true)
       
       // Ocultar mensaje de éxito después de 2 segundos
@@ -355,21 +394,38 @@ export default function NuevoGasto() {
               <img 
                 src={ocrPreview} 
                 alt="Ticket escaneado" 
-                className="w-16 h-20 object-cover rounded-lg border border-white/[0.06]"
+                className="w-24 h-32 object-cover rounded-lg border border-white/[0.06] flex-shrink-0"
               />
               <div className="flex-1 min-w-0">
                 {ocrRawText && (
-                  <div className="text-[10px] text-gray-500 max-h-16 overflow-y-auto font-mono leading-relaxed bg-white/[0.02] rounded-md p-2">
-                    {ocrRawText.split('\n').filter(l => l.trim()).slice(0, 6).map((line, i) => (
-                      <div key={i} className="truncate">{line}</div>
+                  <div className="text-xs text-gray-400 max-h-40 overflow-y-auto font-mono leading-relaxed bg-white/[0.03] rounded-lg p-3 border border-white/[0.04]">
+                    {ocrRawText.split('\n').filter(l => l.trim()).map((line, i) => (
+                      <div key={i} className="whitespace-pre-wrap break-words">{line}</div>
                     ))}
                   </div>
                 )}
-                {importe && (
-                  <p className="text-xs text-emerald-400 mt-1.5 font-medium">
-                    Importe detectado: ${importe}
-                  </p>
-                )}
+                <div className="mt-2.5 space-y-1.5">
+                  {importe && (
+                    <p className="text-sm text-emerald-400 font-medium">
+                      Importe: ${importe}
+                    </p>
+                  )}
+                  {fecha && (
+                    <p className="text-sm text-gray-300">
+                      Fecha: {fecha}
+                    </p>
+                  )}
+                  {descripcion && (
+                    <p className="text-sm text-gray-300">
+                      Comercio: {descripcion}
+                    </p>
+                  )}
+                  {tipoProducto && codigoArticulo && (
+                    <p className="text-sm text-blue-400 font-medium">
+                      Concepto: {tipoProducto}/{codigoArticulo} — {conceptos.find(c => c.tipoProducto === tipoProducto && c.codigoArticulo === codigoArticulo)?.descripcion || 'Detectado'}
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
             <p className="text-[10px] text-gray-600 mt-2">
@@ -419,24 +475,67 @@ export default function NuevoGasto() {
           </div>
         </div>
 
-        {/* Tipo de gasto */}
-        {/* <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            Tipo de gasto
+        {/* Tipo de Producto (Softland) */}
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
+            Tipo de Gasto
           </label>
-          <select
-            className="input-field"
-            value={tipo}
-            onChange={(e) => setTipo(e.target.value as TipoGasto)}
-            required
-          >
-            {(Object.keys(NOMBRES_TIPO) as TipoGasto[]).map((t) => (
-              <option key={t} value={t}>
-                {NOMBRES_TIPO[t]}
-              </option>
-            ))}
-          </select>
-        </div> */}
+          {loadingConceptos ? (
+            <div className="input-field flex items-center gap-2 text-gray-500 text-sm">
+              <FaSpinner className="animate-spin text-xs" />
+              Cargando conceptos...
+            </div>
+          ) : (
+            <select
+              className="input-field text-sm appearance-none bg-[#1a1b23] text-white"
+              value={tipoProducto}
+              onChange={(e) => {
+                setTipoProducto(e.target.value)
+                // Auto-seleccionar el primer artículo del tipo elegido
+                const primero = conceptos.find(c => c.tipoProducto === e.target.value)
+                if (primero) setCodigoArticulo(primero.codigoArticulo)
+              }}
+              required
+            >
+              <option value="">Seleccioná un tipo...</option>
+              {[...new Set(conceptos.map(c => c.tipoProducto))].map((tp) => (
+                <option key={tp} value={tp}>
+                  {tp === 'COMBLU' ? 'COMBLU — Combustibles y Lubricantes' :
+                   tp === 'TARIFA' ? 'TARIFA — Tarifas y Peajes' :
+                   tp === 'HONPRO' ? 'HONPRO — Honorarios Profesionales' :
+                   tp === 'REPUES' ? 'REPUES — Repuestos' :
+                   tp === 'VIATIC' ? 'VIATIC — Viáticos' :
+                   tp === 'VARIOS' ? 'VARIOS — Gastos Varios' :
+                   tp}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {/* Código de Artículo (Softland) */}
+        {tipoProducto && (
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
+              Concepto / Código
+            </label>
+            <select
+              className="input-field text-sm appearance-none bg-[#1a1b23] text-white"
+              value={codigoArticulo}
+              onChange={(e) => setCodigoArticulo(e.target.value)}
+              required
+            >
+              <option value="">Seleccioná un concepto...</option>
+              {conceptos
+                .filter(c => c.tipoProducto === tipoProducto)
+                .map((c) => (
+                  <option key={`${c.tipoProducto}-${c.codigoArticulo}`} value={c.codigoArticulo}>
+                    {c.codigoArticulo} — {c.descripcion} ({c.unidadMedida})
+                  </option>
+                ))}
+            </select>
+          </div>
+        )}
 
         {/* Importe */}
         <div>

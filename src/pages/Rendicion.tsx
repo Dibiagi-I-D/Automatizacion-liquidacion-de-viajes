@@ -2,7 +2,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { FaTruck, FaSpinner, FaCalendarAlt, FaCheckCircle, FaClock, FaEye, FaChevronRight } from 'react-icons/fa'
-import { BANDERAS, NOMBRES_TIPO, Pais, TipoGasto } from '../types'
+import { BANDERAS, Pais } from '../types'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
@@ -23,7 +23,9 @@ interface Gasto {
   nroViaje: number
   fecha: string
   pais: Pais
-  tipo: TipoGasto
+  tipo: string
+  tipoProducto: string
+  codigoArticulo: string
   importe: number
   descripcion?: string
   createdAt: string

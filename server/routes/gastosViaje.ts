@@ -11,6 +11,8 @@ interface Gasto {
   fecha: string
   pais: string
   tipo: string
+  tipoProducto: string      // Tipo de producto Softland (COMBLU, TARIFA, etc.)
+  codigoArticulo: string     // Código artículo Softland (1, 5, 99, etc.)
   importe: number
   descripcion?: string
   chofer: string
@@ -53,7 +55,7 @@ router.get('/:nroViaje', (req: Request, res: Response) => {
 
 // ─── POST /api/gastos-viaje ── Crear un gasto ───
 router.post('/', (req: Request, res: Response) => {
-  const { nroViaje, fecha, pais, tipo, importe, descripcion, chofer, patenteTractor } = req.body
+  const { nroViaje, fecha, pais, tipo, tipoProducto, codigoArticulo, importe, descripcion, chofer, patenteTractor } = req.body
 
   if (!nroViaje || !fecha || !pais || importe === undefined) {
     return res.status(400).json({ success: false, error: 'Faltan campos obligatorios' })
@@ -65,6 +67,8 @@ router.post('/', (req: Request, res: Response) => {
     fecha,
     pais,
     tipo: tipo || 'COMBUSTIBLE',
+    tipoProducto: tipoProducto || '',
+    codigoArticulo: codigoArticulo || '',
     importe: parseFloat(importe),
     descripcion: descripcion?.trim() || undefined,
     chofer: chofer || '',

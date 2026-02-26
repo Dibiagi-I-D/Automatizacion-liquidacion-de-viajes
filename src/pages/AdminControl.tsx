@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BANDERAS, NOMBRES_PAIS, Pais, TipoGasto, NOMBRES_TIPO } from '../types'
+import { BANDERAS, NOMBRES_PAIS, Pais } from '../types'
 import { FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck, FaChevronDown, FaChevronUp, FaSearch, FaClipboardCheck, FaExclamationTriangle, FaTrailer, FaFileExport, FaSignOutAlt } from 'react-icons/fa'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
@@ -22,7 +22,9 @@ interface Gasto {
   nroViaje: number
   fecha: string
   pais: Pais
-  tipo: TipoGasto
+  tipo: string
+  tipoProducto: string
+  codigoArticulo: string
   importe: number
   descripcion?: string
   createdAt: string
@@ -447,7 +449,8 @@ export default function AdminControl() {
                             <tr className="border-t border-white/[0.04] bg-white/[0.02]">
                               <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider">Fecha</th>
                               <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider">País</th>
-                              <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider">Tipo</th>
+                              <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider">Concepto</th>
+                              <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider hidden sm:table-cell">Código</th>
                               <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider hidden sm:table-cell">Descripción</th>
                               <th className="text-right py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider">Importe</th>
                             </tr>
@@ -462,7 +465,17 @@ export default function AdminControl() {
                                     <span className="text-gray-400">{NOMBRES_PAIS[gasto.pais]}</span>
                                   </span>
                                 </td>
-                                <td className="py-2.5 px-4 text-gray-300">{NOMBRES_TIPO[gasto.tipo]}</td>
+                                <td className="py-2.5 px-4">
+                                  <span className="text-gray-300">{gasto.tipo}</span>
+                                  {gasto.tipoProducto && (
+                                    <span className="block text-[10px] text-gray-600">{gasto.tipoProducto}</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-4 text-gray-400 hidden sm:table-cell font-mono text-[11px]">
+                                  {gasto.tipoProducto && gasto.codigoArticulo 
+                                    ? `${gasto.tipoProducto}/${gasto.codigoArticulo}` 
+                                    : '—'}
+                                </td>
                                 <td className="py-2.5 px-4 text-gray-500 hidden sm:table-cell max-w-[200px] truncate">{gasto.descripcion || '—'}</td>
                                 <td className="py-2.5 px-4 text-right font-medium text-white">$ {formatImporte(gasto.importe)}</td>
                               </tr>
@@ -470,7 +483,7 @@ export default function AdminControl() {
                             {/* Fila total */}
                             <tr className="border-t border-white/[0.06] bg-white/[0.02]">
                               <td colSpan={3} className="py-3 px-4 text-right font-semibold text-gray-400 sm:hidden">TOTAL</td>
-                              <td colSpan={4} className="py-3 px-4 text-right font-semibold text-gray-400 hidden sm:table-cell">TOTAL</td>
+                              <td colSpan={5} className="py-3 px-4 text-right font-semibold text-gray-400 hidden sm:table-cell">TOTAL</td>
                               <td className="py-3 px-4 text-right font-bold text-white text-sm">$ {formatImporte(total)}</td>
                             </tr>
                           </tbody>

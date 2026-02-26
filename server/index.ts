@@ -4,6 +4,7 @@ import dotenv from 'dotenv'
 import authRoutes from './routes/auth.js'
 import gastosRoutes from './routes/gastos.js'
 import gastosViajeRoutes from './routes/gastosViaje.js'
+import conceptosRoutes from './routes/conceptos.js'
 import softlandRoutes from './routes/softland.js'
 import driversRoutes from './routes/drivers.js'
 import ocrRoutes from './routes/ocr.js'
@@ -31,6 +32,7 @@ app.use(express.json({ limit: '10mb' }))
 app.use('/api/auth', authRoutes)
 app.use('/api/gastos', gastosRoutes)
 app.use('/api/gastos-viaje', gastosViajeRoutes)
+app.use('/api/conceptos', conceptosRoutes)
 app.use('/api/softland', softlandRoutes)
 app.use('/api/drivers', driversRoutes)
 app.use('/api/ocr', ocrRoutes)
