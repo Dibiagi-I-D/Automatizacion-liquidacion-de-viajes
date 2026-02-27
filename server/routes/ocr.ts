@@ -47,6 +47,8 @@ Extraé los siguientes datos y devolvelos ÚNICAMENTE como JSON válido (sin mar
   "descripcion": (nombre del comercio o establecimiento, máximo 120 caracteres, o ""),
   "tipoProducto": (TIPPRO: código del tipo de producto según la tabla de abajo. OBLIGATORIO, nunca vacío),
   "codigoArticulo": (ARTCOD: código del artículo según la tabla de abajo. OBLIGATORIO, nunca vacío),
+  "formalidad": (clasificación fiscal: "FORMAL" o "INFORMAL". Ver reglas de formalidad abajo. OBLIGATORIO, nunca vacío),
+  "proveedor": (nombre o razón social del proveedor/emisor del ticket, máximo 120 caracteres. Si no se puede identificar, devolvé ""),
   "textoCompleto": (todo el texto visible en el ticket, preservando saltos de línea)
 }
 
@@ -98,6 +100,90 @@ REGLAS DE CLASIFICACIÓN (OBLIGATORIAS):
 15. Si el ticket menciona litros (LT), SOLO puede ser COMBLU.
 16. Si hay ambigüedad entre dos opciones, priorizá la de mayor frecuencia.
 17. FALLBACK: Si no hay coincidencia clara, usá TARIFA/14 (Gastos extras). NUNCA dejes tipoProducto ni codigoArticulo vacíos.
+
+REGLAS DE FORMALIDAD (OBLIGATORIAS):
+La formalidad determina el tratamiento fiscal del IVA. Solo hay DOS valores posibles: "FORMAL" o "INFORMAL".
+
+Es FORMAL cuando:
+- El ticket tiene IVA discriminado (línea "IVA 21%: $XXX" o "IVA 10.5%")
+- Tiene CUIT del emisor (formato XX-XXXXXXXX-X)
+- Tiene CAE (Código de Autorización Electrónico)
+- Dice "FACTURA A" o "FACTURA B"
+- Es de un proveedor grande/oficial (autopistas, organismos gubernamentales, estaciones de servicio)
+- Tiene QR de AFIP
+
+Es INFORMAL cuando:
+- No discrimina IVA (solo monto total sin desglose)
+- Dice "Monotributo" o "IVA no discriminado"
+- Es ticket manuscrito o recibo simple
+- Dice "FACTURA C" (consumidor final)
+- Son gastos menores (comidas, propinas, cambios de moneda, estacionamientos informales)
+- No aparece CUIT ni datos fiscales del emisor
+
+Guía probabilística por artículo (usar cuando no hay señales claras en el ticket):
+- TARIFA/1 (Túnel Cristo Redentor): 99% FORMAL → por defecto FORMAL
+- TARIFA/2 (Migraciones): 96% FORMAL → si tiene CAE→FORMAL, si no→INFORMAL
+- TARIFA/3 (Aduana): 96% FORMAL → por defecto FORMAL (organismo oficial)
+- TARIFA/5 (Peaje ARG): 94% FORMAL → si tiene IVA discriminado→FORMAL, si no→INFORMAL
+- TARIFA/10 (Desinfección): 90% FORMAL → si organismo oficial→FORMAL, si no→INFORMAL
+- TARIFA/4 (Peaje CHL): por defecto FORMAL
+- TARIFA/6 (Peaje URY): por defecto FORMAL
+- TARIFA/7 (Iscamen): 12% FORMAL → si sello oficial→FORMAL, si no→INFORMAL
+- TARIFA/8 (Sellados): por defecto INFORMAL
+- TARIFA/11 (Senasa): por defecto FORMAL (organismo oficial)
+- TARIFA/12 (Viáticos): 8% FORMAL → por defecto INFORMAL
+- TARIFA/13 (Estacionamiento): por defecto INFORMAL
+- TARIFA/14 (Gastos extras): 14% FORMAL → por defecto INFORMAL
+- TARIFA/21 (Gastos Frontera): 2% FORMAL → por defecto INFORMAL
+- HONPRO/4 (ATA): 8% FORMAL → si tiene CUIT y CAE→FORMAL, si no→INFORMAL
+- HONPRO/6 (Honorarios): 6% FORMAL → por defecto INFORMAL
+- HONPRO/2 (Gestiones Aduaneras): por defecto INFORMAL
+- HONPRO/3 (Servicios Aduaneros): por defecto INFORMAL
+- HONPRO/5 (Alquiler Docwell): por defecto INFORMAL
+- NEUMAT/1,2,3 (Neumáticos): 1% FORMAL → por defecto INFORMAL
+- COMBLU/3,9 (Combustibles/Lubricantes): si tiene factura→FORMAL, si no→INFORMAL
+- SERVIC/3 (Falso Flete): por defecto INFORMAL
+NUNCA devuelvas "MIXTO" — siempre decidí entre FORMAL o INFORMAL.
+
+REGLAS DE PROVEEDOR:
+Identificá al proveedor/emisor del ticket. La empresa tiene proveedores recurrentes. Usá esta tabla para mapear lo que ves en el ticket al proveedor correcto.
+
+TABLA COMPLETA DE PROVEEDORES (ordenados por frecuencia de uso):
+Cta | Proveedor                                  | Registros | Categoría Típica | Formalidad | Palabras clave en el ticket
+103 | Dirección Nacional de Migraciones           | 5515      | TARIFA-2         | FORMAL     | migraciones, DNM, entrada, salida, paso fronterizo
+03  | Autopistas del Sol / Ausol                  | 4878      | TARIFA-5         | FORMAL     | autopista del sol, ausol, peaje, autopista
+404 | SENASA - Servicio Desinfección              | 2151      | TARIFA-10        | FORMAL     | senasa, desinfección, fumigación, servicio sanitario
+8   | Red de Peajes Varios                        | 2085      | TARIFA-5         | FORMAL     | peaje, ruta, telepeaje, tag, vialidad
+13  | Túnel Cristo Redentor Concesión             | 1842      | TARIFA-1         | FORMAL     | túnel, cristo redentor, ruta 7, paso los libertadores
+177 | ATA / Despachantes de Aduana                | 1754      | HONPRO-4         | INFORMAL   | ata, agente aduanero, despachante, aduana
+142 | Gestores / Profesionales Varios             | 1307      | HONPRO-6         | INFORMAL   | honorarios, gestor, profesional, trámite
+00  | Proveedores Informales Genéricos            | 176       | TARIFA-14        | INFORMAL   | (sin datos fiscales, tickets sin razón social)
+410 | Concesionaria Peaje Mendoza                 | 150       | TARIFA-5         | FORMAL     | peaje mendoza, ruta mendoza
+210 | Gomerías / Servicios Neumáticos             | 157       | NEUMAT-3         | INFORMAL   | gomería, pinchadura, neumático, cubierta
+305 | Iscamen - Control Fitosanitario             | 41        | TARIFA-7         | INFORMAL   | iscamen, barrera sanitaria, control fitosanitario
+500 | Restaurantes / Comidas en ruta              | 120       | TARIFA-12        | INFORMAL   | restaurante, comedor, parador, almuerzo, cena
+600 | Estacionamientos                            | 5         | TARIFA-13        | INFORMAL   | estacionamiento, parking, cochera
+700 | Docwell / Alquileres                        | 2         | HONPRO-5         | INFORMAL   | docwell, alquiler, predio
+800 | Servicios Aduaneros Varios                  | 1         | HONPRO-3         | INFORMAL   | servicio aduanero, gestión aduanera
+
+INSTRUCCIONES DE DETECCIÓN DE PROVEEDOR:
+1. Buscá la RAZÓN SOCIAL o NOMBRE COMERCIAL del emisor en el ticket (ej: "AUTOPISTAS DEL SOL S.A.", "YPF S.A.")
+2. Buscá el CUIT del emisor (formato XX-XXXXXXXX-X) y su nombre asociado
+3. Buscá logos, marcas o sellos visibles
+4. RELACIÓN INTELIGENTE: Cruzá la información del proveedor con el artículo clasificado:
+   - Si clasificaste como TARIFA/2 (Migraciones) → el proveedor probablemente es "Dirección Nacional de Migraciones"
+   - Si clasificaste como TARIFA/5 (Peaje ARG) → buscá el nombre de la autopista/concesionaria en el ticket
+   - Si clasificaste como TARIFA/10 (Desinfección) → el proveedor probablemente es "SENASA" o el organismo sanitario
+   - Si clasificaste como TARIFA/1 (Túnel) → el proveedor es "Túnel Cristo Redentor"
+   - Si clasificaste como HONPRO/4 (ATA) → buscá el nombre del despachante/agente aduanero
+   - Si clasificaste como HONPRO/6 (Honorarios) → buscá el nombre del profesional/gestor
+   - Si clasificaste como NEUMAT → buscá el nombre de la gomería
+   - Si clasificaste como TARIFA/12 (Viáticos) → buscá el nombre del restaurante/comercio
+   - Si clasificaste como TARIFA/3 (Aduana) → "Aduana" o "DGA" o la oficina aduanera
+   - Si clasificaste como TARIFA/7 (Iscamen) → "ISCAMEN"
+   - Si clasificaste como TARIFA/11 (Senasa) → "SENASA"
+5. COHERENCIA: El proveedor, el artículo y la formalidad deben ser coherentes entre sí. Ejemplo: si el proveedor es "Dirección Nacional de Migraciones", el artículo debe ser TARIFA/2 y la formalidad FORMAL.
+6. Si no podés identificar al proveedor con certeza, devolvé "" (vacío). NO inventes nombres.
 
 REGLAS DE EXTRACCIÓN:
 - El "importe" debe ser el TOTAL FINAL del ticket (total a pagar, no subtotales ni IVA por separado)
@@ -193,6 +279,8 @@ REGLAS DE EXTRACCIÓN:
       descripcion: datos.descripcion || '',
       tipoProducto: datos.tipoProducto || '',
       codigoArticulo: datos.codigoArticulo ? String(datos.codigoArticulo) : '',
+      formalidad: (datos.formalidad === 'FORMAL' || datos.formalidad === 'INFORMAL') ? datos.formalidad : 'INFORMAL',
+      proveedor: datos.proveedor || '',
     }
 
     const rawText = datos.textoCompleto || geminiText
@@ -203,7 +291,9 @@ REGLAS DE EXTRACCIÓN:
       pais: resultado.pais,
       descripcion: resultado.descripcion?.substring(0, 50),
       tipoProducto: resultado.tipoProducto,
-      codigoArticulo: resultado.codigoArticulo
+      codigoArticulo: resultado.codigoArticulo,
+      formalidad: resultado.formalidad,
+      proveedor: resultado.proveedor?.substring(0, 50),
     })
 
     return res.json({

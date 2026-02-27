@@ -26,6 +26,8 @@ interface Gasto {
   tipo: string
   tipoProducto: string
   codigoArticulo: string
+  formalidad: string
+  proveedor: string
   importe: number
   descripcion?: string
   createdAt: string
@@ -257,10 +259,22 @@ export default function DetalleViaje() {
                     {gasto.tipoProducto && gasto.codigoArticulo && (
                       <p className="text-[10px] text-gray-600 font-mono">
                         {gasto.tipoProducto}/{gasto.codigoArticulo}
+                        {gasto.formalidad && (
+                          <span className={`ml-2 px-1.5 py-0.5 rounded font-sans ${
+                            gasto.formalidad === 'FORMAL'
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : 'bg-amber-500/10 text-amber-400'
+                          }`}>
+                            {gasto.formalidad}
+                          </span>
+                        )}
                       </p>
                     )}
                     <p className="text-xs text-gray-500 mt-0.5">
                       {formatFecha(gasto.fecha)}
+                      {gasto.proveedor && (
+                        <span className="text-gray-600"> · {gasto.proveedor}</span>
+                      )}
                     </p>
                     {gasto.descripcion && (
                       <p className="text-xs text-gray-600 mt-1.5 truncate">

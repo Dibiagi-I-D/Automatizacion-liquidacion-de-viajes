@@ -26,6 +26,8 @@ export default function NuevoGasto() {
   const [pais, setPais] = useState<Pais>('ARG')
   const [tipoProducto, setTipoProducto] = useState('')
   const [codigoArticulo, setCodigoArticulo] = useState('')
+  const [formalidad, setFormalidad] = useState<'FORMAL' | 'INFORMAL'>('INFORMAL')
+  const [proveedor, setProveedor] = useState('')
   const [importe, setImporte] = useState('')
   const [descripcion, setDescripcion] = useState('')
   const [showSuccess, setShowSuccess] = useState(false)
@@ -138,6 +140,17 @@ export default function NuevoGasto() {
       setCodigoArticulo(ca)
       console.log('Concepto asignado:', tp, '/', ca)
 
+      // Formalidad (FORMAL/INFORMAL)
+      const form = data.datos?.formalidad === 'FORMAL' ? 'FORMAL' : 'INFORMAL'
+      setFormalidad(form)
+      console.log('Formalidad:', form)
+
+      // Proveedor
+      if (data.datos?.proveedor) {
+        setProveedor(data.datos.proveedor)
+        console.log('Proveedor:', data.datos.proveedor)
+      }
+
       setShowOcrResult(true)
 
     } catch (error) {
@@ -210,6 +223,8 @@ export default function NuevoGasto() {
           tipo: conceptoSeleccionado?.descripcion || tipoProducto || 'Sin clasificar',
           tipoProducto,
           codigoArticulo,
+          formalidad,
+          proveedor: proveedor.trim() || undefined,
           importe: importeNum,
           descripcion: descripcion.trim() || undefined,
           chofer: (chofer as any)?.nombreCompleto || '',
@@ -230,6 +245,8 @@ export default function NuevoGasto() {
       setDescripcion('')
       setTipoProducto('')
       setCodigoArticulo('')
+      setFormalidad('INFORMAL')
+      setProveedor('')
       setShowSuccess(true)
       
       // Ocultar mensaje de éxito después de 2 segundos
@@ -425,6 +442,14 @@ export default function NuevoGasto() {
                       Concepto: {tipoProducto}/{codigoArticulo} — {conceptos.find(c => c.tipoProducto === tipoProducto && c.codigoArticulo === codigoArticulo)?.descripcion || 'Detectado'}
                     </p>
                   )}
+                  <p className={`text-sm font-medium ${formalidad === 'FORMAL' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    Formalidad: {formalidad}
+                  </p>
+                  {proveedor && (
+                    <p className="text-sm text-gray-300">
+                      Proveedor: {proveedor}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -535,6 +560,48 @@ export default function NuevoGasto() {
             </select>
           </div>
         )}
+
+        {/* Formalidad (FORMAL / INFORMAL) */}
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
+            Formalidad
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {(['FORMAL', 'INFORMAL'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFormalidad(f)}
+                className={`min-h-[52px] px-3 py-2.5 rounded-xl border transition-all active:scale-95 ${
+                  formalidad === f
+                    ? f === 'FORMAL'
+                      ? 'bg-emerald-600/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-amber-600/10 border-amber-500/30 text-amber-400'
+                    : 'bg-white/[0.02] border-white/[0.06] text-gray-500'
+                }`}
+              >
+                <div className="text-sm font-medium">{f}</div>
+                <div className="text-[10px] mt-0.5 opacity-70">
+                  {f === 'FORMAL' ? 'Con IVA / Factura A-B' : 'Sin IVA / Factura C'}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Proveedor */}
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
+            Proveedor <span className="text-gray-600 normal-case tracking-normal">(opcional)</span>
+          </label>
+          <input
+            type="text"
+            className="input-field text-sm"
+            placeholder="Nombre o razón social del proveedor..."
+            value={proveedor}
+            onChange={(e) => setProveedor(e.target.value)}
+          />
+        </div>
 
         {/* Importe */}
         <div>

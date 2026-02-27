@@ -25,6 +25,8 @@ interface Gasto {
   tipo: string
   tipoProducto: string
   codigoArticulo: string
+  formalidad: string
+  proveedor: string
   importe: number
   descripcion?: string
   createdAt: string
@@ -451,6 +453,8 @@ export default function AdminControl() {
                               <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider">País</th>
                               <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider">Concepto</th>
                               <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider hidden sm:table-cell">Código</th>
+                              <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider hidden sm:table-cell">Formal.</th>
+                              <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider hidden sm:table-cell">Proveedor</th>
                               <th className="text-left py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider hidden sm:table-cell">Descripción</th>
                               <th className="text-right py-2.5 px-4 text-gray-500 font-medium uppercase tracking-wider">Importe</th>
                             </tr>
@@ -476,6 +480,16 @@ export default function AdminControl() {
                                     ? `${gasto.tipoProducto}/${gasto.codigoArticulo}` 
                                     : '—'}
                                 </td>
+                                <td className="py-2.5 px-4 hidden sm:table-cell">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                    gasto.formalidad === 'FORMAL'
+                                      ? 'bg-emerald-500/10 text-emerald-400'
+                                      : 'bg-amber-500/10 text-amber-400'
+                                  }`}>
+                                    {gasto.formalidad || 'N/D'}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-4 text-gray-400 hidden sm:table-cell max-w-[150px] truncate text-[11px]">{gasto.proveedor || '—'}</td>
                                 <td className="py-2.5 px-4 text-gray-500 hidden sm:table-cell max-w-[200px] truncate">{gasto.descripcion || '—'}</td>
                                 <td className="py-2.5 px-4 text-right font-medium text-white">$ {formatImporte(gasto.importe)}</td>
                               </tr>
@@ -483,7 +497,7 @@ export default function AdminControl() {
                             {/* Fila total */}
                             <tr className="border-t border-white/[0.06] bg-white/[0.02]">
                               <td colSpan={3} className="py-3 px-4 text-right font-semibold text-gray-400 sm:hidden">TOTAL</td>
-                              <td colSpan={5} className="py-3 px-4 text-right font-semibold text-gray-400 hidden sm:table-cell">TOTAL</td>
+                              <td colSpan={7} className="py-3 px-4 text-right font-semibold text-gray-400 hidden sm:table-cell">TOTAL</td>
                               <td className="py-3 px-4 text-right font-bold text-white text-sm">$ {formatImporte(total)}</td>
                             </tr>
                           </tbody>
