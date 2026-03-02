@@ -238,6 +238,7 @@ export default function Login() {
         nroInterno: selectedTractor.USR_TRASEM_NROINT, // También guardamos el número interno
         createdAt: new Date().toISOString(),
         nombreCompleto: selectedChofer.Nombre_Completo,
+        empresaChofer: selectedChofer.Codigo_Empresa_Chofer, // Código empresa para CORMVI
         patenteTractor: selectedTractor.USR_TRASEM_PATENT
       } as any
 

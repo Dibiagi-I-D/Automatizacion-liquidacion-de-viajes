@@ -228,6 +228,8 @@ export default function NuevoGasto() {
           importe: importeNum,
           descripcion: descripcion.trim() || undefined,
           chofer: (chofer as any)?.nombreCompleto || '',
+          legajoChofer: chofer?.legajo || '',
+          empresaChofer: (chofer as any)?.empresaChofer || '',
           patenteTractor: chofer?.interno || '',
         })
       })

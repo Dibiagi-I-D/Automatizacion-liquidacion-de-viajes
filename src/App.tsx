@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import AdminLogin from './pages/AdminLogin'
 import AdminControl from './pages/AdminControl'
+import AdminViajeDetalle from './pages/AdminViajeDetalle'
 import ProtectedRoute from './components/ProtectedRoute'
 
 function AdminProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -28,6 +29,14 @@ function App() {
               element={
                 <AdminProtectedRoute>
                   <AdminControl />
+                </AdminProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/viaje/:nroViaje"
+              element={
+                <AdminProtectedRoute>
+                  <AdminViajeDetalle />
                 </AdminProtectedRoute>
               }
             />

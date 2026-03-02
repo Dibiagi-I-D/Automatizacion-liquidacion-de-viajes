@@ -17,9 +17,91 @@ interface Gasto {
   proveedor: string          // Razón social o nombre del proveedor
   importe: number
   descripcion?: string
-  chofer: string
+  chofer: string             // Nombre completo del chofer
+  legajoChofer: string       // Legajo del chofer (para CORMVI)
+  empresaChofer: string      // Código empresa del chofer (para CORMVI)
   patenteTractor: string
   createdAt: string
+}
+
+// ═══════════════════════════════════════════════════════════
+// INTERFAZ CORMVI — Movimientos de Softland (tabla destino)
+// ═══════════════════════════════════════════════════════════
+interface CormviRecord {
+  CORMVI_NROCTA: string      // Cuenta contable (proveedor → vacío para gastos de chofer)
+  CORMVI_TIPORI: string      // Tipo origen = tipoProducto (TARIFA, COMBLU, etc.)
+  CORMVI_ARTORI: string      // Artículo origen = codigoArticulo (2, 5, 10, etc.)
+  CORMVI_TIPCPT: string      // Tipo concepto (VT si tiene conceptoEspecial, sino vacío)
+  CORMVI_CODCPT: string      // Código concepto (V001, V000, etc.)
+  CORMVI_COFLIS: string      // Código fiscal / lista precios (vacío por defecto)
+  USR_CORMVI_NLIIVA: string  // Línea IVA: 'S' = INFORMAL (no discrimina), 'N' = FORMAL (discrimina)
+  USR_CORMVI_CANTID: number  // Cantidad (siempre 1 para gastos individuales)
+  USR_CORMVI_PRECIO: number  // Precio unitario = importe
+  VIRT_TOTLIN: number        // Total línea = cantidad × precio
+  USR_CORMVI_PERLIQ: string  // Período liquidación (YYYYMM)
+  USR_CORMVI_EMPLEG: string  // Empresa del legajo (Código empresa chofer)
+  USR_CORMVI_NROLEG: string  // Número de legajo del chofer
+  USR_CORMVI_NROVIA: number  // Número de viaje
+  USR_CORMVI_NROFOR: string  // Número de formulario (id del gasto)
+  USR_CORMVI_PATTRA: string  // Patente del transporte
+  USR_CORMVI_FCHCAL: string  // Fecha de cálculo (fecha del gasto)
+  USR_CORMVI_COSAVI: string  // Costo vía (vacío por defecto)
+  USR_CORMVI_VAITSE: number  // Valor ITS/impuesto (0 por defecto)
+  USR_CORMVI_NOMLEG: string  // Nombre del legajo (nombre completo chofer)
+  USR_CORMVI_CAJCAM: string  // Caja/cambio (vacío por defecto)
+  CORMVI_PRECIO: number      // Precio estándar = importe
+  CORMVI_CANTID: number      // Cantidad estándar = 1
+}
+
+// ═══════════════════════════════════════════════════════════
+// DICCIONARIO DE CONCEPTO ESPECIAL (de conceptos.ts)
+// Mapea tipoProducto/codigoArticulo → TIPCPT/CODCPT
+// ═══════════════════════════════════════════════════════════
+const CONCEPTOS_ESPECIALES: Record<string, { tipcpt: string; codcpt: string }> = {
+  'TARIFA/21': { tipcpt: 'VT', codcpt: 'V001' },   // Gastos en Frontera
+  'TARIFA/8':  { tipcpt: 'VT', codcpt: 'V000' },   // Sellados
+  'SERVIC/3':  { tipcpt: 'VT', codcpt: 'V000' },   // Falso Flete
+}
+
+/**
+ * Convierte un Gasto a formato CORMVI para exportación a Softland
+ */
+function gastoToCormvi(gasto: Gasto): CormviRecord {
+  const claveConcepto = `${gasto.tipoProducto}/${gasto.codigoArticulo}`
+  const conceptoEsp = CONCEPTOS_ESPECIALES[claveConcepto]
+  
+  // Período de liquidación: YYYYMM de la fecha del gasto
+  const fechaGasto = new Date(gasto.fecha)
+  const periodoLiq = `${fechaGasto.getFullYear()}${String(fechaGasto.getMonth() + 1).padStart(2, '0')}`
+  
+  // Fecha de cálculo en formato YYYY-MM-DD
+  const fechaCal = fechaGasto.toISOString().split('T')[0]
+
+  return {
+    CORMVI_NROCTA: '',                                          // Cuenta — se completa en Softland
+    CORMVI_TIPORI: gasto.tipoProducto || '',                    // TARIFA, COMBLU, etc.
+    CORMVI_ARTORI: gasto.codigoArticulo || '',                  // 2, 5, 10, etc.
+    CORMVI_TIPCPT: conceptoEsp?.tipcpt || '',                   // VT si aplica
+    CORMVI_CODCPT: conceptoEsp?.codcpt || '',                   // V001, V000 si aplica
+    CORMVI_COFLIS: '',                                          // Lista precios — vacío
+    USR_CORMVI_NLIIVA: gasto.formalidad === 'INFORMAL' ? 'S' : 'N',  // S=no discrimina IVA, N=discrimina
+    USR_CORMVI_CANTID: 1,                                      // Siempre 1 gasto individual
+    USR_CORMVI_PRECIO: gasto.importe,                           // Importe del gasto
+    VIRT_TOTLIN: gasto.importe,                                 // Total = 1 × importe
+    USR_CORMVI_PERLIQ: periodoLiq,                              // YYYYMM
+    USR_CORMVI_EMPLEG: gasto.empresaChofer || '',               // Empresa del chofer
+    USR_CORMVI_NROLEG: gasto.legajoChofer || '',                // Legajo del chofer
+    USR_CORMVI_NROVIA: gasto.nroViaje,                          // N° viaje
+    USR_CORMVI_NROFOR: gasto.id,                                // ID del gasto como formulario
+    USR_CORMVI_PATTRA: gasto.patenteTractor || '',              // Patente
+    USR_CORMVI_FCHCAL: fechaCal,                                // Fecha del gasto
+    USR_CORMVI_COSAVI: '',                                      // Costo vía — vacío
+    USR_CORMVI_VAITSE: 0,                                       // Impuesto — 0 por defecto
+    USR_CORMVI_NOMLEG: gasto.chofer || '',                      // Nombre completo
+    USR_CORMVI_CAJCAM: '',                                      // Caja/cambio — vacío
+    CORMVI_PRECIO: gasto.importe,                               // Precio estándar
+    CORMVI_CANTID: 1,                                           // Cantidad estándar
+  }
 }
 
 interface Aprobacion {
@@ -43,21 +125,9 @@ router.get('/', (req: Request, res: Response) => {
   })
 })
 
-// ─── GET /api/gastos-viaje/:nroViaje ── Gastos de un viaje específico ───
-router.get('/:nroViaje', (req: Request, res: Response) => {
-  const nroViaje = parseInt(req.params.nroViaje)
-  const gastosDelViaje = gastosEnMemoria.filter(g => g.nroViaje === nroViaje)
-  
-  res.json({
-    success: true,
-    data: gastosDelViaje,
-    total: gastosDelViaje.length
-  })
-})
-
 // ─── POST /api/gastos-viaje ── Crear un gasto ───
 router.post('/', (req: Request, res: Response) => {
-  const { nroViaje, fecha, pais, tipo, tipoProducto, codigoArticulo, formalidad, proveedor, importe, descripcion, chofer, patenteTractor } = req.body
+  const { nroViaje, fecha, pais, tipo, tipoProducto, codigoArticulo, formalidad, proveedor, importe, descripcion, chofer, legajoChofer, empresaChofer, patenteTractor } = req.body
 
   if (!nroViaje || !fecha || !pais || importe === undefined) {
     return res.status(400).json({ success: false, error: 'Faltan campos obligatorios' })
@@ -76,6 +146,8 @@ router.post('/', (req: Request, res: Response) => {
     importe: parseFloat(importe),
     descripcion: descripcion?.trim() || undefined,
     chofer: chofer || '',
+    legajoChofer: legajoChofer || '',
+    empresaChofer: empresaChofer || '',
     patenteTractor: patenteTractor || '',
     createdAt: new Date().toISOString()
   }
@@ -88,21 +160,6 @@ router.post('/', (req: Request, res: Response) => {
     success: true,
     data: nuevoGasto
   })
-})
-
-// ─── DELETE /api/gastos-viaje/:id ── Eliminar un gasto ───
-router.delete('/:id', (req: Request, res: Response) => {
-  const { id } = req.params
-  const index = gastosEnMemoria.findIndex(g => g.id === id)
-  
-  if (index === -1) {
-    return res.status(404).json({ success: false, error: 'Gasto no encontrado' })
-  }
-
-  const eliminado = gastosEnMemoria.splice(index, 1)[0]
-  console.log(`[Gastos] Eliminado: Viaje ${eliminado.nroViaje} | $${eliminado.importe} | Quedan: ${gastosEnMemoria.length}`)
-
-  res.json({ success: true })
 })
 
 // ─── GET /api/gastos-viaje/resumen/por-viaje ── Resumen agrupado ───
@@ -164,6 +221,83 @@ router.delete('/aprobaciones/:nroViaje', (req: Request, res: Response) => {
 
   delete aprobacionesEnMemoria[nroViaje]
   console.log(`[Gastos] ❌ Revocado Viaje ${nroViaje}`)
+
+  res.json({ success: true })
+})
+
+// ════════════════════════════════════════════════════════════
+// EXPORTACIÓN CORMVI — Genera registros para Softland
+// ════════════════════════════════════════════════════════════
+
+// ─── GET /api/gastos-viaje/exportar-cormvi/:nroViaje ── Exportar gastos como CORMVI ───
+router.get('/exportar-cormvi/:nroViaje', (req: Request, res: Response) => {
+  const nroViaje = parseInt(req.params.nroViaje)
+
+  // Verificar que el viaje esté aprobado
+  if (!aprobacionesEnMemoria[nroViaje]) {
+    return res.status(400).json({
+      success: false,
+      error: 'El viaje debe estar aprobado antes de exportar a CORMVI'
+    })
+  }
+
+  const gastosDelViaje = gastosEnMemoria.filter(g => g.nroViaje === nroViaje)
+  if (gastosDelViaje.length === 0) {
+    return res.status(404).json({ success: false, error: 'No hay gastos para este viaje' })
+  }
+
+  // Convertir cada gasto a formato CORMVI
+  const registrosCormvi = gastosDelViaje.map(g => gastoToCormvi(g))
+
+  // Calcular totales
+  const totalImporte = gastosDelViaje.reduce((sum, g) => sum + g.importe, 0)
+
+  console.log(`[CORMVI] 📤 Exportando Viaje ${nroViaje} | ${registrosCormvi.length} registros | Total: $${totalImporte}`)
+
+  res.json({
+    success: true,
+    data: {
+      nroViaje,
+      chofer: gastosDelViaje[0]?.chofer || '',
+      legajoChofer: gastosDelViaje[0]?.legajoChofer || '',
+      patenteTractor: gastosDelViaje[0]?.patenteTractor || '',
+      totalRegistros: registrosCormvi.length,
+      totalImporte,
+      aprobacion: aprobacionesEnMemoria[nroViaje],
+      registros: registrosCormvi,
+      // Gastos originales para referencia
+      gastosOriginales: gastosDelViaje
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════
+// RUTAS PARAMÉTRICAS — DEBEN IR AL FINAL (catchall)
+// ═══════════════════════════════════════════════════════════════
+
+// ─── GET /api/gastos-viaje/:nroViaje ── Gastos de un viaje específico ───
+router.get('/:nroViaje', (req: Request, res: Response) => {
+  const nroViaje = parseInt(req.params.nroViaje)
+  const gastosDelViaje = gastosEnMemoria.filter(g => g.nroViaje === nroViaje)
+  
+  res.json({
+    success: true,
+    data: gastosDelViaje,
+    total: gastosDelViaje.length
+  })
+})
+
+// ─── DELETE /api/gastos-viaje/:id ── Eliminar un gasto ───
+router.delete('/:id', (req: Request, res: Response) => {
+  const { id } = req.params
+  const index = gastosEnMemoria.findIndex(g => g.id === id)
+  
+  if (index === -1) {
+    return res.status(404).json({ success: false, error: 'Gasto no encontrado' })
+  }
+
+  const eliminado = gastosEnMemoria.splice(index, 1)[0]
+  console.log(`[Gastos] Eliminado: Viaje ${eliminado.nroViaje} | $${eliminado.importe} | Quedan: ${gastosEnMemoria.length}`)
 
   res.json({ success: true })
 })
