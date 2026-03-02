@@ -142,6 +142,125 @@ router.get('/roadmaps-public', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/drivers/viaje-activo-public
+ * Detectar el viaje activo en tiempo real cruzando:
+ *   - USR_GTPOCU (movimientos de entrada/salida del tractor)
+ *   - USR_GTVIAH (hojas de ruta con Nro de Viaje real)
+ * Devuelve el viaje más reciente que coincida con el último movimiento del tractor.
+ * Query params:
+ *  - patente: Patente del tractor logueado (obligatorio)
+ */
+router.get('/viaje-activo-public', async (req: Request, res: Response) => {
+  try {
+    const { patente } = req.query;
+
+    if (!patente || typeof patente !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'El parámetro "patente" es requerido'
+      });
+    }
+
+    const patenteNorm = patente.trim().toUpperCase();
+    console.log(`🔍 [Viaje Activo] Buscando viaje para patente: ${patenteNorm}`);
+
+    // QUERY PRINCIPAL: Cruzar último movimiento del tractor (USR_GTPOCU)
+    // con la hoja de ruta más reciente (USR_GTVIAH) para la misma patente
+    const query = `
+      SELECT TOP 1
+        p.USR_GTPOCU_INGSAL AS TipoMovimiento,
+        p.USR_GTPOCU_FECHAC AS FechaMovimiento,
+        p.USR_GTPOCU_HORACO AS HoraMovimiento,
+        p.USR_GTPOCU_TRACTO AS Patente,
+        p.USR_GTPOCU_CHONOM AS Chofer,
+        p.USR_GTPOCU_ORIGEN AS OrigenMovimiento,
+        p.USR_GTPOCU_DESTIN AS DestinoMovimiento,
+        p.USR_GTPOCU_INTTRA AS NumeroInterno,
+        h.USR_GTVIAH_NROVIA AS NroViaje,
+        h.USR_GTVIAH_CODEMP AS CodEmpresa,
+        h.USR_GTVIAH_CERRAD AS Cerrado,
+        h.USR_GTVIAH_FSALID AS FechaSalida,
+        h.USR_GTVIAH_FLLEGA AS FechaLlegada,
+        h.USR_GTVIAH_CHOFER AS ChoferHR,
+        h.USR_GTVIAH_PATTRA AS PatenteHR,
+        h.USR_GTVIAH_PATSEM AS PatenteSemi,
+        h.USR_GTVIAH_ORIGEN AS OrigenHR,
+        h.USR_GTVIAH_DESTIN AS DestinoHR,
+        h.USR_GTVIAH_TEXTOS AS Observaciones,
+        h.USR_GTVIAH_LIQUID AS Liquidado
+      FROM USR_GTPOCU p
+      INNER JOIN USR_GTVIAH h 
+        ON p.USR_GTPOCU_TRACTO = h.USR_GTVIAH_PATTRA
+        AND h.USR_GTVIAH_ANULAD = 'N'
+        AND h.USR_GT_DEBAJA = 'N'
+      WHERE p.USR_GTPOCU_TRACTO = @patente
+        AND DATEDIFF(DAY, TRY_CONVERT(date, p.USR_GTPOCU_FECHAC), CONVERT(date, GETDATE())) <= 10
+      ORDER BY p.USR_GTPOCU_FECHAC DESC, p.USR_GTPOCU_HORACO DESC, h.USR_GTVIAH_NROVIA DESC
+    `;
+
+    const resultados = await sqlServerService.query(query, { patente: patenteNorm });
+
+    if (resultados.length === 0) {
+      console.log(`⚠️ No se encontró viaje activo para ${patenteNorm}`);
+      return res.json({
+        success: true,
+        found: false,
+        message: 'No se encontraron viajes recientes para este tractor',
+        data: null
+      });
+    }
+
+    const r = resultados[0];
+    console.log(`✅ Viaje activo: ${r.NroViaje} (${r.TipoMovimiento}) — ${r.ChoferHR}`);
+
+    res.json({
+      success: true,
+      found: true,
+      message: `Viaje activo: ${r.NroViaje}`,
+      data: {
+        nroViaje: r.NroViaje,
+        codEmpresa: r.CodEmpresa,
+        patente: r.Patente,
+        numeroInterno: r.NumeroInterno,
+        tipoMovimiento: r.TipoMovimiento,
+        fechaMovimiento: r.FechaMovimiento,
+        horaMovimiento: r.HoraMovimiento,
+        origenMovimiento: r.OrigenMovimiento,
+        destinoMovimiento: r.DestinoMovimiento,
+        chofer: r.ChoferHR,
+        patenteSemi: r.PatenteSemi,
+        fechaSalida: r.FechaSalida,
+        fechaLlegada: r.FechaLlegada,
+        origenHR: r.OrigenHR,
+        destinoHR: r.DestinoHR,
+        observaciones: r.Observaciones,
+        cerrado: r.Cerrado,
+        liquidado: r.Liquidado
+      }
+    });
+
+  } catch (error: any) {
+    console.error('❌ Error al buscar viaje activo:', error);
+    
+    if (error.code === 'ESOCKET' || error.code === 'ETIMEOUT' || error.code === 'ELOGIN') {
+      return res.json({
+        success: true,
+        found: false,
+        message: 'SQL Server no disponible',
+        data: null,
+        sqlError: true
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Error al consultar viaje activo',
+      message: error.message
+    });
+  }
+});
+
+/**
  * GET /api/drivers/active
  * Obtener todos los choferes activos desde la API externa
  * Query params:
@@ -510,117 +629,6 @@ router.get('/roadmaps', authenticateToken, async (req: Request, res: Response) =
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: error.message
-    });
-  }
-});
-
-/**
- * GET /api/drivers/viaje-activo-public
- * Detectar el viaje activo en tiempo real consultando USR_GTPOCU (movimientos de tractores)
- * Cruza con USR_TRASEM para validar el tractor y devuelve el último movimiento
- * con su Nro_Viaje para mostrar solo esa hoja de ruta
- * Query params:
- *  - patente: Patente del tractor logueado (obligatorio)
- */
-router.get('/viaje-activo-public', async (req: Request, res: Response) => {
-  try {
-    const { patente } = req.query;
-
-    if (!patente || typeof patente !== 'string') {
-      return res.status(400).json({
-        success: false,
-        error: 'El parámetro "patente" es requerido'
-      });
-    }
-
-    console.log(`🔍 [Viaje Activo] Buscando movimiento reciente para patente: ${patente}`);
-
-    // Consulta a USR_GTPOCU cruzada con USR_TRASEM
-    // Busca el movimiento más reciente del tractor (ENTRA o SALE) en los últimos 5 días
-    const query = `
-      SELECT TOP 5
-        g.USR_GTPOCU_TRACTO AS Patente,
-        ta.USR_TRASEM_NROINT AS NumeroInterno,
-        g.USR_GTPOCU_INGSAL AS TipoMovimiento,
-        g.USR_GTPOCU_FECHAC AS Fecha,
-        g.USR_GTPOCU_HORACO AS Hora,
-        g.USR_GTPOCU_ORIGEN AS Origen,
-        g.USR_GTPOCU_DESTIN AS Destino,
-        g.USR_GTPOCU_CHONOM AS Chofer,
-        g.USR_GTPOCU_NVIAJE AS NroViaje
-      FROM USR_GTPOCU g
-      INNER JOIN USR_TRASEM ta 
-        ON g.USR_GTPOCU_TRACTO = ta.USR_TRASEM_PATENT
-      WHERE ta.USR_TRASEM_TIPVEH = 'T'
-        AND ta.USR_TRASEM_CONDIC = 'A'
-        AND ta.USR_TRASEM_NROINT <> 0
-        AND g.USR_GTPOCU_TRACTO = @patente
-        AND DATEDIFF(DAY, TRY_CONVERT(date, g.USR_GTPOCU_FECHAC), CONVERT(date, GETDATE())) <= 5
-      ORDER BY g.USR_GTPOCU_FECHAC DESC, g.USR_GTPOCU_HORACO DESC
-    `;
-
-    const movimientos = await sqlServerService.query(query, { patente: patente.trim().toUpperCase() });
-
-    if (movimientos.length === 0) {
-      console.log(`⚠️ No se encontraron movimientos recientes para ${patente}`);
-      return res.json({
-        success: true,
-        found: false,
-        message: 'No se encontraron movimientos recientes para este tractor',
-        data: null
-      });
-    }
-
-    // El primer resultado es el movimiento más reciente
-    const ultimoMovimiento = movimientos[0];
-    const nroViaje = ultimoMovimiento.NroViaje;
-
-    console.log(`✅ Viaje activo encontrado: ${nroViaje} (${ultimoMovimiento.TipoMovimiento}) - ${ultimoMovimiento.Destino}`);
-
-    res.json({
-      success: true,
-      found: true,
-      message: `Viaje activo: ${nroViaje}`,
-      data: {
-        nroViaje: nroViaje,
-        patente: ultimoMovimiento.Patente,
-        numeroInterno: ultimoMovimiento.NumeroInterno,
-        tipoMovimiento: ultimoMovimiento.TipoMovimiento, // ENTRA o SALE
-        fecha: ultimoMovimiento.Fecha,
-        hora: ultimoMovimiento.Hora,
-        origen: ultimoMovimiento.Origen,
-        destino: ultimoMovimiento.Destino,
-        chofer: ultimoMovimiento.Chofer
-      },
-      // También devolver todos los movimientos recientes por si sirve
-      movimientosRecientes: movimientos.map((m: any) => ({
-        nroViaje: m.NroViaje,
-        tipoMovimiento: m.TipoMovimiento,
-        fecha: m.Fecha,
-        hora: m.Hora,
-        origen: m.Origen,
-        destino: m.Destino
-      }))
-    });
-
-  } catch (error: any) {
-    console.error('❌ Error al buscar viaje activo:', error);
-    
-    // Si SQL Server no está disponible (en Render por ejemplo), devolver gracefully
-    if (error.code === 'ESOCKET' || error.code === 'ETIMEOUT' || error.code === 'ELOGIN') {
-      return res.json({
-        success: true,
-        found: false,
-        message: 'SQL Server no disponible — mostrando todas las hojas de ruta',
-        data: null,
-        sqlError: true
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      error: 'Error al consultar movimientos del tractor',
       message: error.message
     });
   }

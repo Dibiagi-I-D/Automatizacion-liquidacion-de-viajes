@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FaTruck, FaSpinner, FaMapMarkedAlt, FaCalendarAlt, FaCheckCircle, FaClock, FaPlus, FaUser, FaTrailer } from 'react-icons/fa'
+import { FaTruck, FaSpinner, FaMapMarkedAlt, FaCalendarAlt, FaCheckCircle, FaClock, FaPlus, FaUser, FaTrailer, FaSatelliteDish } from 'react-icons/fa'
 import { useAuth } from '../context/AuthContext'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
@@ -17,6 +17,27 @@ interface HojaDeRuta {
   Estado_Viaje: string
 }
 
+interface ViajeActivo {
+  nroViaje: number
+  codEmpresa: string
+  patente: string
+  numeroInterno: number
+  tipoMovimiento: string // ENTRA o SALE
+  fechaMovimiento: string
+  horaMovimiento: string
+  origenMovimiento: string
+  destinoMovimiento: string
+  chofer: string
+  patenteSemi: string
+  fechaSalida: string | null
+  fechaLlegada: string | null
+  origenHR: string
+  destinoHR: string
+  observaciones: string
+  cerrado: string
+  liquidado: string
+}
+
 export default function HojasDeRuta() {
   const navigate = useNavigate()
   const { chofer } = useAuth()
@@ -25,6 +46,8 @@ export default function HojasDeRuta() {
   const [error, setError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [gastosCount, setGastosCount] = useState<Record<number, number>>({})
+  const [viajeActivo, setViajeActivo] = useState<ViajeActivo | null>(null)
+  const [modoDeteccion, setModoDeteccion] = useState<'tiempo-real' | 'historial'>('historial')
 
   // Cargar conteo de gastos desde el servidor
   useEffect(() => {
@@ -50,10 +73,51 @@ export default function HojasDeRuta() {
     try {
       setLoading(true)
       setError('')
+
+      const patenteTractor = chofer?.interno || ''
+
+      // PASO 1: Intentar detectar viaje activo en tiempo real desde SQL Server
+      // (cruza USR_GTPOCU con USR_GTVIAH para obtener el Nro de Viaje real)
+      try {
+        if (patenteTractor) {
+          console.log('🛰️ Consultando viaje activo en tiempo real para:', patenteTractor)
+          const viajeResponse = await fetch(`${API_URL}/drivers/viaje-activo-public?patente=${encodeURIComponent(patenteTractor)}`)
+          const viajeData = await viajeResponse.json()
+
+          if (viajeData.success && viajeData.found && viajeData.data?.nroViaje) {
+            const viaje = viajeData.data as ViajeActivo
+            setViajeActivo(viaje)
+            setModoDeteccion('tiempo-real')
+            console.log('✅ Viaje activo detectado en tiempo real:', viaje.nroViaje)
+
+            // Construir la hoja de ruta directamente con datos de SQL Server (USR_GTVIAH)
+            const hojaSQL: HojaDeRuta = {
+              Cod_Empresa: viaje.codEmpresa || '',
+              Nro_Viaje: viaje.nroViaje,
+              Fecha_Salida: viaje.fechaSalida || '',
+              Fecha_Llegada: viaje.fechaLlegada || null,
+              Nombre_Chofer: viaje.chofer || '',
+              Patente_Tractor: viaje.patente || patenteTractor,
+              Patente_Semirremolque: viaje.patenteSemi || '',
+              Observaciones: viaje.observaciones || '',
+              Estado_Viaje: viaje.cerrado === 'N' ? 'Abierto' : 'Cerrado'
+            }
+
+            setHojasDeRuta([hojaSQL])
+            setLoading(false)
+            return // Listo, no necesitamos la API externa
+          }
+        }
+      } catch (err) {
+        console.log('⚠️ SQL Server no disponible, se intentará con la API externa')
+      }
       
-      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/drivers/roadmaps-public`)
+      // PASO 2: Fallback → Obtener hojas de ruta de la API externa
+      setModoDeteccion('historial')
+      const nombreChofer = (chofer as any)?.nombreCompleto || ''
+
+      const response = await fetch(`${API_URL}/drivers/roadmaps-public`)
       
-      // Si la API devuelve error 500, mostrar mensaje específico
       if (response.status === 500) {
         setError('⚠️ Error en la API de hojas de ruta. El servidor externo está devolviendo un error 500. Por favor contacta al administrador del sistema.')
         setLoading(false)
@@ -62,117 +126,38 @@ export default function HojasDeRuta() {
       
       const data = await response.json()
       
-      if (data.success) {
-        // Filtrar solo las hojas de ruta del chofer y tractor logueados
-        const nombreChofer = (chofer as any)?.nombreCompleto || ''
-        const patenteTractor = chofer?.interno || ''
-        const nroInterno = (chofer as any)?.nroInterno || ''
-        
-        console.log('🔍 DEBUG - Datos de filtrado:')
-        console.log('Chofer logueado:', nombreChofer)
-        console.log('Patente logueada:', patenteTractor)
-        console.log('Nro Interno logueado:', nroInterno)
-        console.log('Total de hojas recibidas:', data.data.length)
-        
-        // Mostrar primeras hojas para debug con TODOS los campos
-        if (data.data.length > 0) {
-          console.log('📄 HOJA 1 COMPLETA:', JSON.stringify(data.data[0], null, 2))
-          console.log('📄 HOJA 1 - Nombre_Chofer:', data.data[0].Nombre_Chofer)
-          console.log('📄 HOJA 1 - Patente_Tractor:', data.data[0].Patente_Tractor)
-          
-          if (data.data.length > 1) {
-            console.log('📄 HOJA 2 - Nombre_Chofer:', data.data[1].Nombre_Chofer)
-            console.log('📄 HOJA 2 - Patente_Tractor:', data.data[1].Patente_Tractor)
-          }
-        }
-        
-        // Buscar específicamente hojas que tengan la patente o el chofer
-        const hojasConEstaPatente = data.data.filter((h: HojaDeRuta) => 
-          h.Patente_Tractor && h.Patente_Tractor.includes('427')
-        )
-        console.log('🚗 Hojas con patente que contiene "427":', hojasConEstaPatente.length)
-        if (hojasConEstaPatente.length > 0) {
-          console.log('🚗 Primera hoja con esta patente:', hojasConEstaPatente[0])
-        }
-        
-        const hojasConEsteChofer = data.data.filter((h: HojaDeRuta) => 
-          h.Nombre_Chofer && h.Nombre_Chofer.includes('Valenzuela')
-        )
-        console.log('👤 Hojas con chofer que contiene "Valenzuela":', hojasConEsteChofer.length)
-        if (hojasConEsteChofer.length > 0) {
-          console.log('👤 Primera hoja con este chofer:', hojasConEsteChofer[0])
-        }
-        
-        const hojasFiltradas = data.data.filter((hoja: HojaDeRuta) => {
-          // Validar que existan los campos necesarios
-          if (!hoja.Nombre_Chofer || !hoja.Patente_Tractor) {
-            return false
-          }
-          
-          // Normalizar nombres para comparación (sin espacios extras, mayúsculas)
-          const nombreHojaNormalizado = (hoja.Nombre_Chofer || '').trim().toUpperCase()
-          const nombreChoferNormalizado = (nombreChofer || '').trim().toUpperCase()
-          
-          // Normalizar patentes (eliminar TODOS los espacios)
-          const patenteHojaNormalizada = (hoja.Patente_Tractor || '').trim().toUpperCase().replace(/\s+/g, '')
-          const patenteTractorNormalizada = (patenteTractor || '').trim().toUpperCase().replace(/\s+/g, '')
-          
-          const nombreMatch = nombreHojaNormalizado === nombreChoferNormalizado
-          const patenteMatch = patenteHojaNormalizada === patenteTractorNormalizada
-          
-          // Debug de cada comparación
-          console.log('📋 Comparando hoja de ruta:', {
-            nroViaje: hoja.Nro_Viaje,
-            choferHoja: hoja.Nombre_Chofer,
-            patenteHoja: hoja.Patente_Tractor,
-            choferLogueado: nombreChofer,
-            patenteLogueada: patenteTractor,
-            nombreMatch,
-            patenteMatch,
-            ambosMatch: nombreMatch && patenteMatch
-          })
-          
-          return nombreMatch && patenteMatch
-        })
-        
-        console.log('✅ Hojas filtradas:', hojasFiltradas.length)
-        if (hojasFiltradas.length > 0) {
-          console.log('Hojas que pasaron el filtro:', hojasFiltradas)
-        }
-        
-        // Ordenar por número de viaje descendente (el más reciente primero)
-        const hojasOrdenadas = hojasFiltradas.sort((a: HojaDeRuta, b: HojaDeRuta) => b.Nro_Viaje - a.Nro_Viaje)
-        
-        // Filtrar: mostrar solo el último viaje y los que estén a menos de 10 días
-        let hojasRecientes: HojaDeRuta[] = []
-        
-        if (hojasOrdenadas.length > 0) {
-          const viajeReciente = hojasOrdenadas[0]
-          hojasRecientes.push(viajeReciente)
-          
-          // Fecha del viaje más reciente
-          const fechaReciente = new Date(viajeReciente.Fecha_Salida)
-          
-          // Agregar viajes con menos de 10 días de diferencia
-          for (let i = 1; i < hojasOrdenadas.length; i++) {
-            const hoja = hojasOrdenadas[i]
-            const fechaHoja = new Date(hoja.Fecha_Salida)
-            const diferenciaDias = Math.abs((fechaReciente.getTime() - fechaHoja.getTime()) / (1000 * 60 * 60 * 24))
-            
-            if (diferenciaDias <= 10) {
-              hojasRecientes.push(hoja)
-            }
-          }
-        }
-        
-        console.log('📅 Viajes recientes (últimos 10 días):', hojasRecientes.length)
-        setHojasDeRuta(hojasRecientes)
-      } else {
+      if (!data.success) {
         setError(data.message || 'Error al cargar hojas de ruta')
+        return
+      }
+
+      // Filtrar hojas de ruta del chofer + tractor logueado
+      const hojasFiltradas = data.data.filter((hoja: HojaDeRuta) => {
+        if (!hoja.Nombre_Chofer || !hoja.Patente_Tractor) return false
+        
+        const nombreHojaNorm = (hoja.Nombre_Chofer || '').trim().toUpperCase()
+        const nombreChoferNorm = (nombreChofer || '').trim().toUpperCase()
+        const patenteHojaNorm = (hoja.Patente_Tractor || '').trim().toUpperCase().replace(/\s+/g, '')
+        const patenteTractorNorm = (patenteTractor || '').trim().toUpperCase().replace(/\s+/g, '')
+        
+        return nombreHojaNorm === nombreChoferNorm && patenteHojaNorm === patenteTractorNorm
+      })
+      
+      // Ordenar por número de viaje descendente (más reciente primero)
+      const hojasOrdenadas = hojasFiltradas.sort((a: HojaDeRuta, b: HojaDeRuta) => b.Nro_Viaje - a.Nro_Viaje)
+
+      console.log('📋 Hojas del chofer+tractor:', hojasOrdenadas.length, hojasOrdenadas.map((h: HojaDeRuta) => h.Nro_Viaje))
+
+      // Mostrar solo la más reciente
+      if (hojasOrdenadas.length > 0) {
+        console.log('📌 Mostrando solo la hoja más reciente:', hojasOrdenadas[0].Nro_Viaje)
+        setHojasDeRuta([hojasOrdenadas[0]])
+      } else {
+        setHojasDeRuta([])
       }
     } catch (err) {
       console.error('Error al cargar hojas de ruta:', err)
-      setError('⚠️ La API de hojas de ruta está devolviendo un error 500. Por favor contacta al administrador del sistema o intenta más tarde.')
+      setError('⚠️ La API de hojas de ruta está devolviendo un error. Por favor contacta al administrador del sistema o intenta más tarde.')
     } finally {
       setLoading(false)
     }
@@ -241,11 +226,52 @@ export default function HojasDeRuta() {
               {(chofer as any)?.nombreCompleto || 'Chofer'}
             </p>
             <p className="text-xs text-gray-500 mt-0.5">
-              {chofer?.interno || 'Tractor'} · Últimos 10 días
+              {chofer?.interno || 'Tractor'}
             </p>
+          </div>
+          <div className="text-right">
+            {modoDeteccion === 'tiempo-real' ? (
+              <div className="flex items-center gap-1.5">
+                <FaSatelliteDish className="text-emerald-400 text-xs animate-pulse" />
+                <span className="text-[10px] font-medium text-emerald-400">EN TIEMPO REAL</span>
+              </div>
+            ) : (
+              <span className="text-[10px] font-medium text-gray-500">Últimos 10 días</span>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Info del viaje activo detectado */}
+      {viajeActivo && modoDeteccion === 'tiempo-real' && (
+        <div className="mb-4 p-3 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04]">
+          <div className="flex items-center gap-2 mb-1.5">
+            <FaSatelliteDish className="text-emerald-400 text-xs" />
+            <span className="text-xs font-medium text-emerald-400">Viaje detectado automáticamente</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <p className="text-gray-400">
+              <span className="text-gray-600">Movimiento:</span>{' '}
+              <span className={viajeActivo.tipoMovimiento === 'SALE' ? 'text-blue-400' : 'text-amber-400'}>
+                {viajeActivo.tipoMovimiento === 'SALE' ? '🚀 SALIDA' : '🏁 ENTRADA'}
+              </span>
+            </p>
+            <p className="text-gray-400">
+              <span className="text-gray-600">Fecha:</span> {viajeActivo.fechaMovimiento} {viajeActivo.horaMovimiento}
+            </p>
+            {viajeActivo.origenMovimiento && (
+              <p className="text-gray-400">
+                <span className="text-gray-600">Origen:</span> {viajeActivo.origenMovimiento}
+              </p>
+            )}
+            {viajeActivo.destinoMovimiento && (
+              <p className="text-gray-400">
+                <span className="text-gray-600">Destino:</span> {viajeActivo.destinoMovimiento}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Buscador */}
       {hojasDeRuta.length > 0 && (
