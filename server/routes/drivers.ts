@@ -634,4 +634,54 @@ router.get('/roadmaps', authenticateToken, async (req: Request, res: Response) =
   }
 });
 
+/**
+ * GET /api/drivers/expenses-step1
+ * Gastos de viaje Paso 1 (código RRFF)
+ * Proxy hacia: https://api-app-porteria.onrender.com/trips/v1/expenses-step1
+ *
+ * Query params (todos opcionales):
+ *   search  — filtra por Nro Viaje, Chofer, Patente o Nro Formulario
+ *   page    — número de página (default: 1)
+ *   limit   — registros por página (default: 20)
+ */
+router.get('/expenses-step1', async (req: Request, res: Response) => {
+  try {
+    const { search, page, limit } = req.query;
+
+    console.log('📞 [expenses-step1] Consultando gastos viaje paso 1...');
+    if (search) console.log(`🔍 Búsqueda: "${search}"`);
+
+    const result = await driversApiService.obtenerGastosViajePaso1(
+      search as string | undefined,
+      page  ? parseInt(page  as string) : undefined,
+      limit ? parseInt(limit as string) : undefined
+    );
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: search
+          ? `Resultados para: "${search}"`
+          : 'Gastos viaje paso 1 obtenidos exitosamente',
+        data:       result.data,
+        total:      result.total,
+        pagination: result.pagination
+      });
+    } else {
+      res.status((result as any).status || 500).json({
+        success: false,
+        error:   (result as any).error,
+        message: (result as any).message
+      });
+    }
+  } catch (error: any) {
+    console.error('❌ Error en endpoint /expenses-step1:', error);
+    res.status(500).json({
+      success: false,
+      error:   'Error interno del servidor',
+      message: error.message
+    });
+  }
+});
+
 export default router;

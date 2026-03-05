@@ -1,10 +1,11 @@
 import axios, { AxiosInstance } from 'axios';
 
 /**
- * Servicio para consumir la API externa de choferes
+ * Servicio para consumir la API externa de choferes y viajes
  */
 class DriversApiService {
   private api: AxiosInstance;
+  private apiPorteria: AxiosInstance; // API de portería (expenses, etc.)
   private readonly bearerToken = 'db_dibia_MkI5YVBYZzRRbmx0WTJKM09UVTFNRmhaTmxjdw==';
 
   constructor() {
@@ -17,6 +18,17 @@ class DriversApiService {
         'Accept': 'application/json'
       },
       timeout: 60000 // 60 segundos (API externa puede tardar en despertar - cold start)
+    });
+
+    // Segunda instancia: API de portería (expenses, trips, etc.)
+    this.apiPorteria = axios.create({
+      baseURL: process.env.PORTERIA_API_URL || 'https://api-app-porteria.onrender.com',
+      headers: {
+        'Authorization': `Bearer ${this.bearerToken}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 60000
     });
 
     // Interceptor para logging de requests
@@ -39,6 +51,25 @@ class DriversApiService {
       },
       (error) => {
         console.error('❌ Response Error:', error.response?.status, error.message);
+        return Promise.reject(error);
+      }
+    );
+
+    // Interceptors para apiPorteria
+    this.apiPorteria.interceptors.request.use(
+      (config) => {
+        console.log(`🟣 [Portería] Request: ${config.method?.toUpperCase()} ${config.url}`);
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
+    this.apiPorteria.interceptors.response.use(
+      (response) => {
+        console.log(`✅ [Portería] Response: ${response.status} ${response.config.url}`);
+        return response;
+      },
+      (error) => {
+        console.error('❌ [Portería] Response Error:', error.response?.status, error.message);
         return Promise.reject(error);
       }
     );
@@ -87,6 +118,59 @@ class DriversApiService {
         };
       } else {
         // Error al configurar la petición
+        return {
+          success: false,
+          error: 'Error al realizar la petición',
+          message: error.message
+        };
+      }
+    }
+  }
+
+  /**
+   * GET /trips/v1/expenses-step1
+   * Obtener gastos de viaje - Paso 1 (código RRFF)
+   * API: api-app-porteria.onrender.com
+   * @param search - Filtra por Nro Viaje, Chofer, Patente o Nro Formulario
+   * @param page   - Número de página (default: 1)
+   * @param limit  - Registros por página (default: 20)
+   */
+  async obtenerGastosViajePaso1(search?: string, page?: number, limit?: number) {
+    try {
+      const params: Record<string, any> = {};
+      if (search) params.search = search;
+      if (page)   params.page  = page;
+      if (limit)  params.limit = limit;
+
+      const response = await this.apiPorteria.get('/trips/v1/expenses-step1', { params });
+
+      const registros   = Array.isArray(response.data) ? response.data : (response.data?.data || []);
+      const pagination  = response.data?.pagination || null;
+
+      return {
+        success: true,
+        data: registros,
+        total: registros.length,
+        pagination
+      };
+    } catch (error: any) {
+      console.error('Error al obtener gastos viaje paso 1:', error.message);
+
+      if (error.response) {
+        return {
+          success: false,
+          error: 'Error en la respuesta de la API de portería',
+          status: error.response.status,
+          message: error.response.data?.message || error.message,
+          details: error.response.data
+        };
+      } else if (error.request) {
+        return {
+          success: false,
+          error: 'Sin respuesta de la API de portería',
+          message: 'La API no respondió. Puede estar despertando (cold start), reintentá en unos segundos.'
+        };
+      } else {
         return {
           success: false,
           error: 'Error al realizar la petición',

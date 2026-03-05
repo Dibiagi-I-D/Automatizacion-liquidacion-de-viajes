@@ -27,7 +27,7 @@ export default function NuevoGasto() {
   const [tipoProducto, setTipoProducto] = useState('')
   const [codigoArticulo, setCodigoArticulo] = useState('')
   const [formalidad, setFormalidad] = useState<'FORMAL' | 'INFORMAL'>('INFORMAL')
-  const [proveedor, setProveedor] = useState('')
+  const [codigoProveedor, setCodigoProveedor] = useState('')
   const [importe, setImporte] = useState('')
   const [descripcion, setDescripcion] = useState('')
   const [showSuccess, setShowSuccess] = useState(false)
@@ -145,9 +145,9 @@ export default function NuevoGasto() {
       setFormalidad(form)
       console.log('Formalidad:', form)
 
-      // Proveedor
+      // Proveedor (el OCR puede devolver un nombre; lo guardamos como texto libre)
       if (data.datos?.proveedor) {
-        setProveedor(data.datos.proveedor)
+        setCodigoProveedor(data.datos.proveedor)
         console.log('Proveedor:', data.datos.proveedor)
       }
 
@@ -224,7 +224,7 @@ export default function NuevoGasto() {
           tipoProducto,
           codigoArticulo,
           formalidad,
-          proveedor: proveedor.trim() || undefined,
+          codigoProveedor: codigoProveedor.trim() || undefined,
           importe: importeNum,
           descripcion: descripcion.trim() || undefined,
           chofer: (chofer as any)?.nombreCompleto || '',
@@ -248,7 +248,7 @@ export default function NuevoGasto() {
       setTipoProducto('')
       setCodigoArticulo('')
       setFormalidad('INFORMAL')
-      setProveedor('')
+      setCodigoProveedor('')
       setShowSuccess(true)
       
       // Ocultar mensaje de éxito después de 2 segundos
@@ -447,9 +447,9 @@ export default function NuevoGasto() {
                   <p className={`text-sm font-medium ${formalidad === 'FORMAL' ? 'text-emerald-400' : 'text-amber-400'}`}>
                     Formalidad: {formalidad}
                   </p>
-                  {proveedor && (
+                  {codigoProveedor && (
                     <p className="text-sm text-gray-300">
-                      Proveedor: {proveedor}
+                      Proveedor: {codigoProveedor}
                     </p>
                   )}
                 </div>
@@ -594,14 +594,14 @@ export default function NuevoGasto() {
         {/* Proveedor */}
         <div>
           <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
-            Proveedor <span className="text-gray-600 normal-case tracking-normal">(opcional)</span>
+            Código Proveedor <span className="text-gray-600 normal-case tracking-normal">(opcional)</span>
           </label>
           <input
             type="text"
             className="input-field text-sm"
-            placeholder="Nombre o razón social del proveedor..."
-            value={proveedor}
-            onChange={(e) => setProveedor(e.target.value)}
+            placeholder="Código numérico del proveedor en Softland (ej: 142, 999999)..."
+            value={codigoProveedor}
+            onChange={(e) => setCodigoProveedor(e.target.value)}
           />
         </div>
 

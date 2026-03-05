@@ -7,100 +7,110 @@ const router = Router()
 // ═══════════════════════════════════════════════════════
 interface Gasto {
   id: string
-  nroViaje: number
-  fecha: string
+  nroViaje: number           // HOJA DE VIAJE N
+  fecha: string              // FECHA SALIDA del viaje
   pais: string
   tipo: string
-  tipoProducto: string      // Tipo de producto Softland (COMBLU, TARIFA, etc.)
-  codigoArticulo: string     // Código artículo Softland (1, 5, 99, etc.)
-  formalidad: string         // FORMAL o INFORMAL (clasificación fiscal IVA)
-  proveedor: string          // Razón social o nombre del proveedor
-  importe: number
+  tipoProducto: string       // TIPO DE PRODUCTO ORIGINAL (TARIFA, COMBLU, SERVIC, etc.)
+  codigoArticulo: string     // CODIGO PRODUCTO ORIGINAL (10, 21, etc.)
+  formalidad: string         // INFORMAL: 'INFORMAL' → 'S', 'FORMAL' → 'N'
+  codigoProveedor: string    // PROVEEDOR — código numérico Softland (ej: 999999, 142, 177)
+  importe: number            // PRECIO — precio unitario del gasto
+  cantidad: number           // CANTIDAD — cantidad del movimiento (ej: 1.0000, 0.0000)
+  cantidadCormvi: number     // CANTIDAD final CORMVI: -1.0000 (débito) o 1.0000 (crédito)
+  coeficienteViaje: number | null  // COEFICIENTE DE VIAJE SEGUN FECHA DE SALIDA
+  valorItemSeleccionado: number    // VALOR DE ITEM SELECCIONADO
+  valorCajaCamion: number | null   // VALOR DE LA CAJA CAMION (puede ser null)
   descripcion?: string
-  chofer: string             // Nombre completo del chofer
-  legajoChofer: string       // Legajo del chofer (para CORMVI)
-  empresaChofer: string      // Código empresa del chofer (para CORMVI)
-  patenteTractor: string
+  chofer: string             // NOMBRE EMPLEADO — nombre completo del chofer
+  legajoChofer: string       // LEGAJO — número de legajo del chofer
+  empresaChofer: string      // EMPRESA LEGAJO — código empresa del chofer (ej: DIBIAG)
+  patenteTractor: string     // TRACTOR — patente del tractor
+  rendicion: string          // RENDICION — número de rendición
   createdAt: string
 }
 
 // ═══════════════════════════════════════════════════════════
 // INTERFAZ CORMVI — Movimientos de Softland (tabla destino)
+// Columnas en orden exacto del dataset de Softland:
+// PROVEEDOR | TIPO PROD ORIG | COD PROD ORIG | TIPO CONCEPTO | CONCEPTO |
+// COEFICIENTE | INFORMAL | CANTIDAD | PRECIO | PERIODO LIQ |
+// EMPRESA LEGAJO | LEGAJO | HOJA VIAJE | RENDICION | TRACTOR |
+// FECHA SALIDA | COEF VIAJE FECHA SALIDA | VALOR ITEM | NOMBRE EMPLEADO |
+// VALOR CAJA CAMION | PRECIO | CANTIDAD
 // ═══════════════════════════════════════════════════════════
 interface CormviRecord {
-  CORMVI_NROCTA: string      // Cuenta contable (proveedor → vacío para gastos de chofer)
-  CORMVI_TIPORI: string      // Tipo origen = tipoProducto (TARIFA, COMBLU, etc.)
-  CORMVI_ARTORI: string      // Artículo origen = codigoArticulo (2, 5, 10, etc.)
-  CORMVI_TIPCPT: string      // Tipo concepto (VT si tiene conceptoEspecial, sino vacío)
-  CORMVI_CODCPT: string      // Código concepto (V001, V000, etc.)
-  CORMVI_COFLIS: string      // Código fiscal / lista precios (vacío por defecto)
-  USR_CORMVI_NLIIVA: string  // Línea IVA: 'S' = INFORMAL (no discrimina), 'N' = FORMAL (discrimina)
-  USR_CORMVI_CANTID: number  // Cantidad (siempre 1 para gastos individuales)
-  USR_CORMVI_PRECIO: number  // Precio unitario = importe
-  VIRT_TOTLIN: number        // Total línea = cantidad × precio
-  USR_CORMVI_PERLIQ: string  // Período liquidación (YYYYMM)
-  USR_CORMVI_EMPLEG: string  // Empresa del legajo (Código empresa chofer)
-  USR_CORMVI_NROLEG: string  // Número de legajo del chofer
-  USR_CORMVI_NROVIA: number  // Número de viaje
-  USR_CORMVI_NROFOR: string  // Número de formulario (id del gasto)
-  USR_CORMVI_PATTRA: string  // Patente del transporte
-  USR_CORMVI_FCHCAL: string  // Fecha de cálculo (fecha del gasto)
-  USR_CORMVI_COSAVI: string  // Costo vía (vacío por defecto)
-  USR_CORMVI_VAITSE: number  // Valor ITS/impuesto (0 por defecto)
-  USR_CORMVI_NOMLEG: string  // Nombre del legajo (nombre completo chofer)
-  USR_CORMVI_CAJCAM: string  // Caja/cambio (vacío por defecto)
-  CORMVI_PRECIO: number      // Precio estándar = importe
-  CORMVI_CANTID: number      // Cantidad estándar = 1
+  CORMVI_NROCTA: string      // PROVEEDOR — código numérico del proveedor (ej: 999999, 142, 177)
+  CORMVI_TIPORI: string      // TIPO DE PRODUCTO ORIGINAL — TARIFA, COMBLU, SERVIC, etc.
+  CORMVI_ARTORI: string      // CODIGO PRODUCTO ORIGINAL — número del artículo (ej: 10, 21)
+  CORMVI_TIPCPT: string      // TIPO DE CONCEPTO — siempre 'A'
+  CORMVI_CODCPT: string      // CONCEPTO — siempre 'S000'
+  CORMVI_COFLIS: string      // COEFICIENTE — siempre 'ARS'
+  USR_CORMVI_NLIIVA: string  // INFORMAL — 'S' = informal (no discrimina IVA), 'N' = formal (discrimina)
+  USR_CORMVI_CANTID: number  // CANTIDAD — cantidad del movimiento (ej: 1.0000, 0.0000)
+  USR_CORMVI_PRECIO: number  // PRECIO — precio unitario del gasto
+  VIRT_TOTLIN: number        // (virtual) Total línea = CANTIDAD × PRECIO
+  USR_CORMVI_PERLIQ: string  // PERIODO A LIQUIDAR — formato YYYYMM (ej: 202511)
+  USR_CORMVI_EMPLEG: string  // EMPRESA LEGAJO — código empresa del chofer (ej: DIBIAG)
+  USR_CORMVI_NROLEG: string  // LEGAJO — número de legajo del chofer (ej: 1253)
+  USR_CORMVI_NROVIA: number  // HOJA DE VIAJE N — número de viaje/hoja de ruta
+  USR_CORMVI_NROFOR: string  // RENDICION — número de rendición/formulario
+  USR_CORMVI_PATTRA: string  // TRACTOR — patente del tractor (ej: MTZ 997)
+  USR_CORMVI_FCHCAL: string | null  // FECHA SALIDA — fecha de salida del viaje (puede ser NULL)
+  USR_CORMVI_COSAVI: number | null  // COEFICIENTE DE VIAJE SEGUN FECHA DE SALIDA (puede ser NULL)
+  USR_CORMVI_VAITSE: number  // VALOR DE ITEM SELECCIONADO — valor calculado del ítem
+  USR_CORMVI_NOMLEG: string  // NOMBRE EMPLEADO — nombre completo del chofer
+  USR_CORMVI_CAJCAM: number | null  // VALOR DE LA CAJA CAMION (puede ser NULL)
+  CORMVI_PRECIO: number      // PRECIO (estándar Softland) — precio del artículo base
+  CORMVI_CANTID: number      // CANTIDAD (estándar Softland) — -1.0000 débito / 1.0000 crédito
 }
 
 // ═══════════════════════════════════════════════════════════
-// DICCIONARIO DE CONCEPTO ESPECIAL (de conceptos.ts)
-// Mapea tipoProducto/codigoArticulo → TIPCPT/CODCPT
+// DICCIONARIO DE CONCEPTO ESPECIAL — ya no aplica:
+// TIPO DE CONCEPTO siempre es 'A' y CONCEPTO siempre es 'S000'
+// según los datos reales de Softland
 // ═══════════════════════════════════════════════════════════
-const CONCEPTOS_ESPECIALES: Record<string, { tipcpt: string; codcpt: string }> = {
-  'TARIFA/21': { tipcpt: 'VT', codcpt: 'V001' },   // Gastos en Frontera
-  'TARIFA/8':  { tipcpt: 'VT', codcpt: 'V000' },   // Sellados
-  'SERVIC/3':  { tipcpt: 'VT', codcpt: 'V000' },   // Falso Flete
-}
 
 /**
  * Convierte un Gasto a formato CORMVI para exportación a Softland
+ * Columnas en el orden exacto del dataset:
+ * PROVEEDOR | TIPO PROD | COD PROD | TIPO CONCEPTO | CONCEPTO | COEFICIENTE |
+ * INFORMAL | CANTIDAD | PRECIO | PERIODO | EMPRESA | LEGAJO | HOJA VIAJE |
+ * RENDICION | TRACTOR | FECHA SALIDA | COEF VIAJE | VALOR ITEM |
+ * NOMBRE EMPLEADO | CAJA CAMION | PRECIO | CANTIDAD
  */
 function gastoToCormvi(gasto: Gasto): CormviRecord {
-  const claveConcepto = `${gasto.tipoProducto}/${gasto.codigoArticulo}`
-  const conceptoEsp = CONCEPTOS_ESPECIALES[claveConcepto]
-  
   // Período de liquidación: YYYYMM de la fecha del gasto
   const fechaGasto = new Date(gasto.fecha)
   const periodoLiq = `${fechaGasto.getFullYear()}${String(fechaGasto.getMonth() + 1).padStart(2, '0')}`
-  
-  // Fecha de cálculo en formato YYYY-MM-DD
-  const fechaCal = fechaGasto.toISOString().split('T')[0]
+
+  // Fecha de salida en formato YYYY-MM-DD HH:mm:ss.SSS o null
+  const fechaSalida = gasto.fecha ? `${fechaGasto.toISOString().replace('T', ' ').replace('Z', '')}` : null
 
   return {
-    CORMVI_NROCTA: '',                                          // Cuenta — se completa en Softland
-    CORMVI_TIPORI: gasto.tipoProducto || '',                    // TARIFA, COMBLU, etc.
-    CORMVI_ARTORI: gasto.codigoArticulo || '',                  // 2, 5, 10, etc.
-    CORMVI_TIPCPT: conceptoEsp?.tipcpt || '',                   // VT si aplica
-    CORMVI_CODCPT: conceptoEsp?.codcpt || '',                   // V001, V000 si aplica
-    CORMVI_COFLIS: '',                                          // Lista precios — vacío
-    USR_CORMVI_NLIIVA: gasto.formalidad === 'INFORMAL' ? 'S' : 'N',  // S=no discrimina IVA, N=discrimina
-    USR_CORMVI_CANTID: 1,                                      // Siempre 1 gasto individual
-    USR_CORMVI_PRECIO: gasto.importe,                           // Importe del gasto
-    VIRT_TOTLIN: gasto.importe,                                 // Total = 1 × importe
-    USR_CORMVI_PERLIQ: periodoLiq,                              // YYYYMM
-    USR_CORMVI_EMPLEG: gasto.empresaChofer || '',               // Empresa del chofer
-    USR_CORMVI_NROLEG: gasto.legajoChofer || '',                // Legajo del chofer
-    USR_CORMVI_NROVIA: gasto.nroViaje,                          // N° viaje
-    USR_CORMVI_NROFOR: gasto.id,                                // ID del gasto como formulario
-    USR_CORMVI_PATTRA: gasto.patenteTractor || '',              // Patente
-    USR_CORMVI_FCHCAL: fechaCal,                                // Fecha del gasto
-    USR_CORMVI_COSAVI: '',                                      // Costo vía — vacío
-    USR_CORMVI_VAITSE: 0,                                       // Impuesto — 0 por defecto
-    USR_CORMVI_NOMLEG: gasto.chofer || '',                      // Nombre completo
-    USR_CORMVI_CAJCAM: '',                                      // Caja/cambio — vacío
-    CORMVI_PRECIO: gasto.importe,                               // Precio estándar
-    CORMVI_CANTID: 1,                                           // Cantidad estándar
+    CORMVI_NROCTA:         gasto.codigoProveedor || '',          // PROVEEDOR (ej: 999999, 142)
+    CORMVI_TIPORI:         gasto.tipoProducto || '',             // TIPO PROD ORIG (ej: TARIFA)
+    CORMVI_ARTORI:         gasto.codigoArticulo || '',           // COD PROD ORIG (ej: 10, 21)
+    CORMVI_TIPCPT:         'A',                                  // TIPO CONCEPTO — siempre 'A'
+    CORMVI_CODCPT:         'S000',                               // CONCEPTO — siempre 'S000'
+    CORMVI_COFLIS:         'ARS',                                // COEFICIENTE — siempre 'ARS'
+    USR_CORMVI_NLIIVA:     gasto.formalidad === 'INFORMAL' ? 'S' : 'N',  // INFORMAL S/N
+    USR_CORMVI_CANTID:     gasto.cantidad ?? 1,                  // CANTIDAD
+    USR_CORMVI_PRECIO:     gasto.importe,                        // PRECIO
+    VIRT_TOTLIN:           (gasto.cantidad ?? 1) * gasto.importe, // (virtual) CANTIDAD × PRECIO
+    USR_CORMVI_PERLIQ:     periodoLiq,                           // PERIODO A LIQUIDAR (YYYYMM)
+    USR_CORMVI_EMPLEG:     gasto.empresaChofer || '',            // EMPRESA LEGAJO
+    USR_CORMVI_NROLEG:     gasto.legajoChofer || '',             // LEGAJO
+    USR_CORMVI_NROVIA:     gasto.nroViaje,                       // HOJA DE VIAJE N
+    USR_CORMVI_NROFOR:     gasto.rendicion || gasto.id,          // RENDICION
+    USR_CORMVI_PATTRA:     gasto.patenteTractor || '',           // TRACTOR
+    USR_CORMVI_FCHCAL:     fechaSalida,                          // FECHA SALIDA (puede ser null)
+    USR_CORMVI_COSAVI:     gasto.coeficienteViaje ?? null,       // COEF. VIAJE SEGUN FECHA SALIDA
+    USR_CORMVI_VAITSE:     gasto.valorItemSeleccionado ?? 0,     // VALOR DE ITEM SELECCIONADO
+    USR_CORMVI_NOMLEG:     gasto.chofer || '',                   // NOMBRE EMPLEADO
+    USR_CORMVI_CAJCAM:     gasto.valorCajaCamion ?? null,        // VALOR DE LA CAJA CAMION
+    CORMVI_PRECIO:         gasto.importe,                        // PRECIO (estándar Softland)
+    CORMVI_CANTID:         gasto.cantidadCormvi ?? -1,           // CANTIDAD CORMVI (-1 débito / 1 crédito)
   }
 }
 
@@ -127,7 +137,16 @@ router.get('/', (req: Request, res: Response) => {
 
 // ─── POST /api/gastos-viaje ── Crear un gasto ───
 router.post('/', (req: Request, res: Response) => {
-  const { nroViaje, fecha, pais, tipo, tipoProducto, codigoArticulo, formalidad, proveedor, importe, descripcion, chofer, legajoChofer, empresaChofer, patenteTractor } = req.body
+  const {
+    nroViaje, fecha, pais, tipo,
+    tipoProducto, codigoArticulo, formalidad,
+    codigoProveedor,
+    importe, cantidad, cantidadCormvi,
+    coeficienteViaje, valorItemSeleccionado, valorCajaCamion,
+    descripcion,
+    chofer, legajoChofer, empresaChofer,
+    patenteTractor, rendicion
+  } = req.body
 
   if (!nroViaje || !fecha || !pais || importe === undefined) {
     return res.status(400).json({ success: false, error: 'Faltan campos obligatorios' })
@@ -135,21 +154,27 @@ router.post('/', (req: Request, res: Response) => {
 
   const nuevoGasto: Gasto = {
     id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-    nroViaje: parseInt(nroViaje),
+    nroViaje:               parseInt(nroViaje),
     fecha,
     pais,
-    tipo: tipo || 'COMBUSTIBLE',
-    tipoProducto: tipoProducto || '',
-    codigoArticulo: codigoArticulo || '',
-    formalidad: formalidad || 'INFORMAL',
-    proveedor: proveedor?.trim() || '',
-    importe: parseFloat(importe),
-    descripcion: descripcion?.trim() || undefined,
-    chofer: chofer || '',
-    legajoChofer: legajoChofer || '',
-    empresaChofer: empresaChofer || '',
-    patenteTractor: patenteTractor || '',
-    createdAt: new Date().toISOString()
+    tipo:                   tipo || 'COMBUSTIBLE',
+    tipoProducto:           tipoProducto || '',
+    codigoArticulo:         codigoArticulo || '',
+    formalidad:             formalidad || 'INFORMAL',
+    codigoProveedor:        codigoProveedor?.toString().trim() || '',   // PROVEEDOR (ej: 999999)
+    importe:                parseFloat(importe),                         // PRECIO
+    cantidad:               cantidad !== undefined ? parseFloat(cantidad) : 1,          // CANTIDAD
+    cantidadCormvi:         cantidadCormvi !== undefined ? parseFloat(cantidadCormvi) : -1, // -1 débito
+    coeficienteViaje:       coeficienteViaje !== undefined ? parseFloat(coeficienteViaje) : null,
+    valorItemSeleccionado:  valorItemSeleccionado !== undefined ? parseFloat(valorItemSeleccionado) : parseFloat(importe),
+    valorCajaCamion:        valorCajaCamion !== undefined ? parseFloat(valorCajaCamion) : null,
+    descripcion:            descripcion?.trim() || undefined,
+    chofer:                 chofer || '',
+    legajoChofer:           legajoChofer || '',
+    empresaChofer:          empresaChofer || '',
+    patenteTractor:         patenteTractor || '',
+    rendicion:              rendicion?.toString() || '',
+    createdAt:              new Date().toISOString()
   }
 
   gastosEnMemoria.push(nuevoGasto)
