@@ -4,7 +4,7 @@ import {
   FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck,
   FaArrowLeft, FaClipboardCheck, FaExclamationTriangle,
   FaFileExport, FaTrailer, FaHashtag, FaBuilding, FaDownload,
-  FaTimes
+  FaTimes, FaPen, FaSave
 } from 'react-icons/fa'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
@@ -47,6 +47,8 @@ interface GastoAPI {
   Valor_Item:         number         // VALOR DE ITEM SELECCIONADO
   Valor_Caja_Camion:  number | null  // VALOR DE LA CAJA CAMION
   Cantidad_CORMVI:    number         // CANTIDAD CORMVI: -1 débito / 1 crédito
+  // ── Sólo para gastos guardados en dibiagi_admin_db ────────────
+  _localId?:          string         // id en dbo.gastos_viaje → habilita la edición
   [key: string]:      any            // otros campos técnicos adicionales
 }
 
@@ -129,6 +131,12 @@ export default function AdminViajeDetalle() {
   const [aprobando, setAprobando] = useState(false)
   const [error, setError] = useState('')
 
+  // Edición de gastos guardados en dibiagi_admin_db
+  const [editando, setEditando] = useState<GastoAPI | null>(null)
+  const [form, setForm] = useState<Record<string, string>>({})
+  const [guardando, setGuardando] = useState(false)
+  const [errorEdicion, setErrorEdicion] = useState('')
+
   const adminData = JSON.parse(sessionStorage.getItem('admin_user') || '{}')
   const estaAprobado = !!aprobacion
 
@@ -168,6 +176,7 @@ export default function AdminViajeDetalle() {
       Valor_Item:          g.valorItemSeleccionado ?? g.importe ?? 0,
       Valor_Caja_Camion:   g.valorCajaCamion ?? null,
       Cantidad_CORMVI:     g.cantidadCormvi ?? -1,
+      _localId:            g.id,
     }
   }
 
@@ -263,6 +272,90 @@ export default function AdminViajeDetalle() {
       if (res.ok) setAprobacion(null)
     } catch (err) {
       console.error('Error al revocar:', err)
+    }
+  }
+
+  // ── Edición de un gasto guardado en dibiagi_admin_db ──────────────
+  const abrirEdicion = (g: GastoAPI) => {
+    setErrorEdicion('')
+    setEditando(g)
+    setForm({
+      codigoProveedor:       g.Proveedor ?? '',
+      tipoProducto:          g.Tipo_Producto ?? '',
+      codigoArticulo:        g.Codigo_Articulo ?? '',
+      formalidad:            g.Informal === 'S' ? 'INFORMAL' : 'FORMAL',
+      cantidad:              String(g.Cantidad ?? 1),
+      importe:               String(g.Precio_Unitario ?? 0),
+      cantidadCormvi:        String(g.Cantidad_CORMVI ?? -1),
+      valorItemSeleccionado: String(g.Valor_Item ?? g.Precio_Unitario ?? 0),
+      rendicion:             g.Numero_Formulario ?? '',
+      legajoChofer:          g.Legajo ?? '',
+      empresaChofer:         g.Empresa_Legajo ?? '',
+      chofer:                g.Nombre_Chofer ?? '',
+      patenteTractor:        g.Patente_Tractor ?? '',
+      descripcion:           g.Descripcion_Gasto ?? '',
+      fecha:                 g.Fecha_Salida ? new Date(g.Fecha_Salida).toISOString().split('T')[0] : '',
+    })
+  }
+
+  const cerrarEdicion = () => {
+    setEditando(null)
+    setForm({})
+    setErrorEdicion('')
+  }
+
+  const setCampo = (k: string, v: string) => setForm(prev => ({ ...prev, [k]: v }))
+
+  const guardarEdicion = async () => {
+    if (!editando?._localId) return
+
+    const importeNum = parseFloat(form.importe)
+    if (isNaN(importeNum) || importeNum <= 0) {
+      setErrorEdicion('El precio debe ser un número mayor a 0')
+      return
+    }
+    const cantidadNum = parseFloat(form.cantidad)
+    if (isNaN(cantidadNum)) {
+      setErrorEdicion('La cantidad debe ser un número')
+      return
+    }
+
+    setGuardando(true)
+    setErrorEdicion('')
+    try {
+      const res = await fetch(`${API_URL}/gastos-viaje/${editando._localId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          codigoProveedor:       form.codigoProveedor,
+          tipoProducto:          form.tipoProducto,
+          codigoArticulo:        form.codigoArticulo,
+          formalidad:            form.formalidad,
+          cantidad:              cantidadNum,
+          importe:               importeNum,
+          cantidadCormvi:        parseFloat(form.cantidadCormvi),
+          valorItemSeleccionado: parseFloat(form.valorItemSeleccionado),
+          rendicion:             form.rendicion,
+          legajoChofer:          form.legajoChofer,
+          empresaChofer:         form.empresaChofer,
+          chofer:                form.chofer,
+          patenteTractor:        form.patenteTractor,
+          descripcion:           form.descripcion,
+          ...(form.fecha ? { fecha: new Date(form.fecha).toISOString() } : {}),
+        })
+      })
+
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Error ${res.status}`)
+      }
+
+      cerrarEdicion()
+      await cargarDatos()   // recarga desde la BD → /admin y la app del chofer quedan iguales
+    } catch (err) {
+      setErrorEdicion(err instanceof Error ? err.message : 'No se pudo guardar el cambio')
+    } finally {
+      setGuardando(false)
     }
   }
 
@@ -481,6 +574,20 @@ export default function AdminViajeDetalle() {
                 </p>
               </div>
 
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={descargarCSV}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/[0.05] hover:bg-white/[0.09] text-gray-300 hover:text-white border border-white/[0.08] transition-all"
+                >
+                  <FaDownload className="text-[10px]" /> CSV
+                </button>
+                <button
+                  onClick={descargarJSON}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/[0.05] hover:bg-white/[0.09] text-gray-300 hover:text-white border border-white/[0.08] transition-all"
+                >
+                  <FaDownload className="text-[10px]" /> JSON
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -510,6 +617,7 @@ export default function AdminViajeDetalle() {
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[160px]">Valor Caja Camión</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[110px]">Precio</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[100px]">Cantidad</th>
+                    <th className="text-center py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[80px]">Editar</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -546,6 +654,19 @@ export default function AdminViajeDetalle() {
                       <td className="py-3.5 px-4 text-gray-500">{reg.USR_CORMVI_CAJCAM || <span className="text-gray-700">—</span>}</td>
                       <td className="py-3.5 px-4 text-right text-gray-300">{formatImporte(reg.CORMVI_PRECIO)}</td>
                       <td className="py-3.5 px-4 text-right text-gray-300">{reg.CORMVI_CANTID}</td>
+                      <td className="py-3.5 px-4 text-center">
+                        {gastos[i]?._localId ? (
+                          <button
+                            onClick={() => abrirEdicion(gastos[i])}
+                            title="Editar este gasto"
+                            className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-blue-500/20 text-gray-400 hover:text-blue-300 border border-white/[0.08] transition-all inline-flex items-center justify-center"
+                          >
+                            <FaPen className="text-[10px]" />
+                          </button>
+                        ) : (
+                          <span className="text-gray-700 text-[10px]" title="Gasto de la API externa — no editable acá">API</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   <tr className="border-t-2 border-white/[0.08] bg-white/[0.03]">
@@ -553,7 +674,7 @@ export default function AdminViajeDetalle() {
                     <td className="py-4 px-4 text-right font-bold text-white text-base">
                       {formatImporte(totalImporte)}
                     </td>
-                    <td colSpan={13} />
+                    <td colSpan={14} />
                   </tr>
                 </tbody>
               </table>
@@ -561,6 +682,145 @@ export default function AdminViajeDetalle() {
           </div>
         )}
       </div>
+
+      {/* ══ Modal de edición ══ */}
+      {editando && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
+          onClick={cerrarEdicion}
+        >
+          <div
+            className="bg-[#161821] border border-white/[0.08] rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[92vh] overflow-y-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header del modal */}
+            <div className="sticky top-0 bg-[#161821] border-b border-white/[0.06] px-5 py-4 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-blue-600/15 flex items-center justify-center flex-shrink-0">
+                <FaPen className="text-blue-400 text-xs" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-semibold text-white">Editar gasto</h3>
+                <p className="text-[11px] text-gray-500">
+                  Viaje {nroViaje} · guardado en dibiagi_admin_db
+                </p>
+              </div>
+              <button
+                onClick={cerrarEdicion}
+                className="w-8 h-8 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] flex items-center justify-center text-gray-400 hover:text-white transition-all"
+              >
+                <FaTimes className="text-xs" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {errorEdicion && (
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/[0.06] border border-red-500/20">
+                  <FaExclamationTriangle className="text-red-400 text-xs flex-shrink-0" />
+                  <p className="text-xs text-red-400">{errorEdicion}</p>
+                </div>
+              )}
+
+              {/* Clasificación Softland */}
+              <div>
+                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Clasificación Softland</p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <Campo label="Tipo Producto" value={form.tipoProducto} onChange={(v) => setCampo('tipoProducto', v)} placeholder="TARIFA" />
+                  <Campo label="Cód. Artículo" value={form.codigoArticulo} onChange={(v) => setCampo('codigoArticulo', v)} placeholder="14" />
+                  <div>
+                    <label className="block text-[11px] text-gray-500 mb-1.5">Formalidad</label>
+                    <select
+                      value={form.formalidad}
+                      onChange={(e) => setCampo('formalidad', e.target.value)}
+                      className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500/50"
+                    >
+                      <option value="INFORMAL">INFORMAL</option>
+                      <option value="FORMAL">FORMAL</option>
+                    </select>
+                  </div>
+                  <Campo label="Proveedor (código)" value={form.codigoProveedor} onChange={(v) => setCampo('codigoProveedor', v)} placeholder="999999" />
+                  <Campo label="Rendición" value={form.rendicion} onChange={(v) => setCampo('rendicion', v)} placeholder="0001-00001234" />
+                  <Campo label="Fecha salida" type="date" value={form.fecha} onChange={(v) => setCampo('fecha', v)} />
+                </div>
+              </div>
+
+              {/* Importes */}
+              <div>
+                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Importes</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <Campo label="Precio" type="number" value={form.importe} onChange={(v) => setCampo('importe', v)} />
+                  <Campo label="Cantidad" type="number" value={form.cantidad} onChange={(v) => setCampo('cantidad', v)} />
+                  <Campo label="Cant. CORMVI" type="number" value={form.cantidadCormvi} onChange={(v) => setCampo('cantidadCormvi', v)} />
+                  <Campo label="Valor ítem" type="number" value={form.valorItemSeleccionado} onChange={(v) => setCampo('valorItemSeleccionado', v)} />
+                </div>
+                <p className="text-[11px] text-gray-600 mt-2">
+                  Total línea: <span className="text-emerald-400 font-medium">
+                    $ {formatImporte((parseFloat(form.cantidad) || 0) * (parseFloat(form.importe) || 0))}
+                  </span>
+                </p>
+              </div>
+
+              {/* Chofer y vehículo */}
+              <div>
+                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Chofer y vehículo</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <Campo label="Nombre empleado" value={form.chofer} onChange={(v) => setCampo('chofer', v)} />
+                  <Campo label="Legajo" value={form.legajoChofer} onChange={(v) => setCampo('legajoChofer', v)} />
+                  <Campo label="Empresa legajo" value={form.empresaChofer} onChange={(v) => setCampo('empresaChofer', v)} />
+                  <Campo label="Tractor" value={form.patenteTractor} onChange={(v) => setCampo('patenteTractor', v)} />
+                </div>
+              </div>
+
+              <Campo label="Descripción" value={form.descripcion} onChange={(v) => setCampo('descripcion', v)} />
+            </div>
+
+            {/* Footer del modal */}
+            <div className="sticky bottom-0 bg-[#161821] border-t border-white/[0.06] px-5 py-4 flex items-center justify-end gap-2">
+              <button
+                onClick={cerrarEdicion}
+                disabled={guardando}
+                className="px-4 py-2 rounded-lg text-xs font-medium text-gray-400 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] transition-all disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={guardarEdicion}
+                disabled={guardando}
+                className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white transition-all disabled:opacity-60"
+              >
+                {guardando
+                  ? <><FaSpinner className="animate-spin text-[10px]" /> Guardando...</>
+                  : <><FaSave className="text-[10px]" /> Guardar cambios</>
+                }
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Campo de texto reutilizable del modal de edición */
+function Campo({
+  label, value, onChange, type = 'text', placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  type?: string
+  placeholder?: string
+}) {
+  return (
+    <div>
+      <label className="block text-[11px] text-gray-500 mb-1.5">{label}</label>
+      <input
+        type={type}
+        value={value ?? ''}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        step={type === 'number' ? 'any' : undefined}
+        className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-white placeholder:text-gray-700 focus:outline-none focus:border-blue-500/50 transition-colors"
+      />
     </div>
   )
 }
