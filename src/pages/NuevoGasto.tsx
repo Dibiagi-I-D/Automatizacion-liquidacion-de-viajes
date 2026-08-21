@@ -69,6 +69,37 @@ export default function NuevoGasto() {
   }, [])
 
   /**
+   * Redimensiona la foto antes de guardarla en la base.
+   * La cámara de un celular saca 3–8 MB; para verificar un ticket alcanza
+   * con el lado mayor en 1600 px, lo que deja archivos de 150–400 KB.
+   * Si algo falla devuelve el original: nunca bloquea el guardado del gasto.
+   */
+  const comprimirImagen = (dataUrl: string, maxLado = 1600, calidad = 0.82): Promise<string> =>
+    new Promise((resolve) => {
+      try {
+        const img = new Image()
+        img.onload = () => {
+          const escala = Math.min(1, maxLado / Math.max(img.width, img.height))
+          if (escala === 1 && dataUrl.length < 900_000) return resolve(dataUrl)
+
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.round(img.width * escala)
+          canvas.height = Math.round(img.height * escala)
+
+          const ctx = canvas.getContext('2d')
+          if (!ctx) return resolve(dataUrl)
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+          resolve(canvas.toDataURL('image/jpeg', calidad))
+        }
+        img.onerror = () => resolve(dataUrl)
+        img.src = dataUrl
+      } catch {
+        resolve(dataUrl)
+      }
+    })
+
+  /**
    * OCR con Gemini 1.5 Flash (servidor)
    * Envía la imagen al backend que usa Gemini AI para máxima precisión.
    */
@@ -212,11 +243,22 @@ export default function NuevoGasto() {
         c => c.tipoProducto === tipoProducto && c.codigoArticulo === codigoArticulo
       )
 
+      // Adjuntar la foto del ticket (comprimida) para que quede como respaldo
+      let fotoParaGuardar: string | undefined
+      if (ocrPreview) {
+        try {
+          fotoParaGuardar = await comprimirImagen(ocrPreview)
+        } catch {
+          fotoParaGuardar = ocrPreview
+        }
+      }
+
       // Enviar gasto al servidor
       const response = await fetch(`${API_URL}/gastos-viaje`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          foto: fotoParaGuardar,
           nroViaje: parseInt(nroViaje),
           fecha: new Date(fecha).toISOString(),
           pais,
@@ -249,6 +291,8 @@ export default function NuevoGasto() {
       setCodigoArticulo('')
       setFormalidad('INFORMAL')
       setCodigoProveedor('')
+      // Limpiar la foto: si no, el próximo gasto se guardaría con el ticket anterior
+      limpiarOCR()
       setShowSuccess(true)
       
       // Ocultar mensaje de éxito después de 2 segundos

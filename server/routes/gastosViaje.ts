@@ -32,6 +32,9 @@ interface Gasto {
   rendicion: string          // RENDICION
   createdAt: string
   updatedAt?: string | null
+  tieneFoto: boolean         // hay imagen del ticket adjunta
+  fotoMime?: string | null   // 'image/jpeg', 'image/png', …
+  fotoSubidaAt?: string | null
 }
 
 interface Aprobacion {
@@ -128,15 +131,59 @@ function rowToGasto(r: any): Gasto {
     rendicion:             r.rendicion || '',
     createdAt:             r.created_at ? new Date(r.created_at).toISOString() : '',
     updatedAt:             r.updated_at ? new Date(r.updated_at).toISOString() : null,
+    tieneFoto:             Number(r.tiene_foto) === 1,
+    fotoMime:              r.foto_mime || null,
+    fotoSubidaAt:          r.foto_subida_at ? new Date(r.foto_subida_at).toISOString() : null,
   }
 }
 
-const SELECT_COLS = `
-  id, nro_viaje, fecha, pais, tipo, tipo_producto, codigo_articulo, formalidad,
-  codigo_proveedor, importe, cantidad, cantidad_cormvi, coeficiente_viaje,
-  valor_item_seleccionado, valor_caja_camion, descripcion, chofer, legajo_chofer,
-  empresa_chofer, patente_tractor, rendicion, created_at, updated_at
-`
+/**
+ * Convierte un data URL ("data:image/jpeg;base64,…") en binario.
+ * Devuelve null si no hay imagen; lanza si el formato es inválido o excede el tope.
+ */
+const MAX_FOTO_BYTES = 8 * 1024 * 1024   // 8 MB ya decodificados
+
+function parseFoto(dataUrl: any): { buffer: Buffer; mime: string } | null {
+  if (!dataUrl || typeof dataUrl !== 'string') return null
+
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/)
+  if (!match) {
+    throw Object.assign(new Error('La foto debe ser un data URL de imagen en base64'), { statusCode: 400 })
+  }
+
+  const mime = match[1]
+  const buffer = Buffer.from(match[2], 'base64')
+
+  if (buffer.length === 0) {
+    throw Object.assign(new Error('La foto llegó vacía'), { statusCode: 400 })
+  }
+  if (buffer.length > MAX_FOTO_BYTES) {
+    throw Object.assign(
+      new Error(`La foto pesa ${(buffer.length / 1024 / 1024).toFixed(1)} MB; el máximo es 8 MB`),
+      { statusCode: 413 }
+    )
+  }
+
+  return { buffer, mime }
+}
+
+// Columnas "livianas". La foto (VARBINARY(MAX)) NUNCA se incluye acá: se sirve
+// aparte por GET /:id/foto para que un listado no arrastre megabytes por fila.
+const COLS = [
+  'id', 'nro_viaje', 'fecha', 'pais', 'tipo', 'tipo_producto', 'codigo_articulo',
+  'formalidad', 'codigo_proveedor', 'importe', 'cantidad', 'cantidad_cormvi',
+  'coeficiente_viaje', 'valor_item_seleccionado', 'valor_caja_camion', 'descripcion',
+  'chofer', 'legajo_chofer', 'empresa_chofer', 'patente_tractor', 'rendicion',
+  'created_at', 'updated_at', 'foto_mime', 'foto_subida_at',
+]
+
+/** Lista para SELECT: columnas livianas + flag de existencia de foto. */
+const SELECT_LIST = `${COLS.join(', ')}, CASE WHEN foto IS NULL THEN 0 ELSE 1 END AS tiene_foto`
+
+/** Lista para OUTPUT de INSERT/UPDATE (mismas columnas, prefijadas). */
+const OUTPUT_LIST =
+  `${COLS.map(c => `INSERTED.${c}`).join(', ')}, ` +
+  `CASE WHEN INSERTED.foto IS NULL THEN 0 ELSE 1 END AS tiene_foto`
 
 /**
  * Respuesta uniforme cuando la base no está disponible.
@@ -174,7 +221,7 @@ const numOrNull = (v: any): number | null => (v === undefined || v === null || v
 router.get('/', async (req: Request, res: Response) => {
   try {
     const rq = await adminDb.request()
-    const result = await rq.query(`SELECT ${SELECT_COLS} FROM dbo.gastos_viaje ORDER BY created_at DESC`)
+    const result = await rq.query(`SELECT ${SELECT_LIST} FROM dbo.gastos_viaje ORDER BY created_at DESC`)
     const data = result.recordset.map(rowToGasto)
     res.json({ success: true, data, total: data.length })
   } catch (error: any) {
@@ -194,7 +241,8 @@ router.post('/', async (req: Request, res: Response) => {
     coeficienteViaje, valorItemSeleccionado, valorCajaCamion,
     descripcion,
     chofer, legajoChofer, empresaChofer,
-    patenteTractor, rendicion
+    patenteTractor, rendicion,
+    foto
   } = req.body
 
   if (!nroViaje || !fecha || !pais || importe === undefined) {
@@ -203,6 +251,14 @@ router.post('/', async (req: Request, res: Response) => {
 
   const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
   const importeNum = parseFloat(importe)
+
+  // La foto es opcional: si viene mal formada avisamos, pero nunca perdemos el gasto
+  let fotoParsed: { buffer: Buffer; mime: string } | null = null
+  try {
+    fotoParsed = parseFoto(foto)
+  } catch (err: any) {
+    return res.status(err.statusCode || 400).json({ success: false, error: err.message })
+  }
 
   try {
     const rq = await adminDb.request()
@@ -227,25 +283,31 @@ router.post('/', async (req: Request, res: Response) => {
     rq.input('empresa_chofer',         sql.NVarChar(64),   txt(empresaChofer))
     rq.input('patente_tractor',        sql.NVarChar(64),   txt(patenteTractor))
     rq.input('rendicion',              sql.NVarChar(64),   txt(rendicion))
+    rq.input('foto',                   sql.VarBinary(sql.MAX), fotoParsed?.buffer ?? null)
+    rq.input('foto_mime',              sql.NVarChar(64),       fotoParsed?.mime ?? null)
 
     const result = await rq.query(`
       INSERT INTO dbo.gastos_viaje (
         id, nro_viaje, fecha, pais, tipo, tipo_producto, codigo_articulo, formalidad,
         codigo_proveedor, importe, cantidad, cantidad_cormvi, coeficiente_viaje,
         valor_item_seleccionado, valor_caja_camion, descripcion, chofer, legajo_chofer,
-        empresa_chofer, patente_tractor, rendicion
+        empresa_chofer, patente_tractor, rendicion, foto, foto_mime, foto_subida_at
       )
-      OUTPUT ${SELECT_COLS.trim().split(/\s*,\s*/).map(c => `INSERTED.${c}`).join(', ')}
+      OUTPUT ${OUTPUT_LIST}
       VALUES (
         @id, @nro_viaje, @fecha, @pais, @tipo, @tipo_producto, @codigo_articulo, @formalidad,
         @codigo_proveedor, @importe, @cantidad, @cantidad_cormvi, @coeficiente_viaje,
         @valor_item, @valor_caja_camion, @descripcion, @chofer, @legajo_chofer,
-        @empresa_chofer, @patente_tractor, @rendicion
+        @empresa_chofer, @patente_tractor, @rendicion,
+        @foto, @foto_mime, CASE WHEN @foto IS NULL THEN NULL ELSE SYSUTCDATETIME() END
       )
     `)
 
     const creado = rowToGasto(result.recordset[0])
-    console.log(`[Gastos] Guardado en BD: Viaje ${creado.nroViaje} | $${creado.importe} | ${creado.chofer}`)
+    console.log(
+      `[Gastos] Guardado en BD: Viaje ${creado.nroViaje} | $${creado.importe} | ${creado.chofer}` +
+      (fotoParsed ? ` | foto ${(fotoParsed.buffer.length / 1024).toFixed(0)} KB` : ' | sin foto')
+    )
     res.status(201).json({ success: true, data: creado })
   } catch (error: any) {
     return dbError(res, error, 'guardar el gasto', true)
@@ -283,6 +345,17 @@ router.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params
   const sets: string[] = []
 
+  // La foto se maneja aparte: es binaria y admite reemplazo o borrado explícito
+  let fotoParsed: { buffer: Buffer; mime: string } | null = null
+  const borrarFoto = req.body.foto === null
+  if (req.body.foto !== undefined && !borrarFoto) {
+    try {
+      fotoParsed = parseFoto(req.body.foto)
+    } catch (err: any) {
+      return res.status(err.statusCode || 400).json({ success: false, error: err.message })
+    }
+  }
+
   try {
     const rq = await adminDb.request()
     rq.input('id', sql.NVarChar(64), id)
@@ -294,6 +367,14 @@ router.put('/:id', async (req: Request, res: Response) => {
       }
     }
 
+    if (fotoParsed) {
+      rq.input('foto',      sql.VarBinary(sql.MAX), fotoParsed.buffer)
+      rq.input('foto_mime', sql.NVarChar(64),       fotoParsed.mime)
+      sets.push('foto = @foto', 'foto_mime = @foto_mime', 'foto_subida_at = SYSUTCDATETIME()')
+    } else if (borrarFoto) {
+      sets.push('foto = NULL', 'foto_mime = NULL', 'foto_subida_at = NULL')
+    }
+
     if (sets.length === 0) {
       return res.status(400).json({ success: false, error: 'No se envió ningún campo para actualizar' })
     }
@@ -303,7 +384,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     const result = await rq.query(`
       UPDATE dbo.gastos_viaje
       SET ${sets.join(', ')}
-      OUTPUT ${SELECT_COLS.trim().split(/\s*,\s*/).map(c => `INSERTED.${c}`).join(', ')}
+      OUTPUT ${OUTPUT_LIST}
       WHERE id = @id
     `)
 
@@ -325,7 +406,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 router.get('/resumen/por-viaje', async (req: Request, res: Response) => {
   try {
     const rq = await adminDb.request()
-    const result = await rq.query(`SELECT ${SELECT_COLS} FROM dbo.gastos_viaje`)
+    const result = await rq.query(`SELECT ${SELECT_LIST} FROM dbo.gastos_viaje`)
 
     const resumen: Record<number, { gastos: Gasto[]; total: number; cantidad: number }> = {}
     result.recordset.map(rowToGasto).forEach(g => {
@@ -468,7 +549,7 @@ router.get('/exportar-cormvi/:nroViaje', async (req: Request, res: Response) => 
     const rq = await adminDb.request()
     rq.input('nro_viaje', sql.Int, nroViaje)
     const result = await rq.query(`
-      SELECT ${SELECT_COLS} FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje ORDER BY created_at
+      SELECT ${SELECT_LIST} FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje ORDER BY created_at
     `)
 
     const gastosDelViaje = result.recordset.map(rowToGasto)
@@ -507,6 +588,40 @@ router.get('/exportar-cormvi/:nroViaje', async (req: Request, res: Response) => 
 })
 
 // ═══════════════════════════════════════════════════════════════
+// FOTO DEL TICKET
+// Ruta de 2 segmentos → no la captura GET /:nroViaje (1 segmento)
+// ═══════════════════════════════════════════════════════════════
+
+// ─── GET /api/gastos-viaje/:id/foto ── Sirve la imagen del ticket ───
+router.get('/:id/foto', async (req: Request, res: Response) => {
+  const { id } = req.params
+  try {
+    const rq = await adminDb.request()
+    rq.input('id', sql.NVarChar(64), id)
+    const result = await rq.query(`
+      SELECT foto, foto_mime FROM dbo.gastos_viaje WHERE id = @id
+    `)
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ success: false, error: 'Gasto no encontrado' })
+    }
+
+    const { foto, foto_mime } = result.recordset[0]
+    if (!foto) {
+      return res.status(404).json({ success: false, error: 'Este gasto no tiene foto adjunta' })
+    }
+
+    res.setHeader('Content-Type', foto_mime || 'image/jpeg')
+    res.setHeader('Content-Length', foto.length)
+    // La imagen de un gasto no cambia salvo reemplazo explícito
+    res.setHeader('Cache-Control', 'private, max-age=3600')
+    return res.send(foto)
+  } catch (error: any) {
+    return dbError(res, error, 'obtener la foto')
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
 // RUTAS PARAMÉTRICAS — DEBEN IR AL FINAL (catchall)
 // ═══════════════════════════════════════════════════════════════
 
@@ -520,7 +635,7 @@ router.get('/:nroViaje', async (req: Request, res: Response) => {
     const rq = await adminDb.request()
     rq.input('nro_viaje', sql.Int, nroViaje)
     const result = await rq.query(`
-      SELECT ${SELECT_COLS} FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje ORDER BY created_at
+      SELECT ${SELECT_LIST} FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje ORDER BY created_at
     `)
     const data = result.recordset.map(rowToGasto)
     res.json({ success: true, data, total: data.length })

@@ -139,8 +139,24 @@ class AdminDbService {
       END
     `)
 
+    // ── Migración 002: foto del ticket ───────────────────────────────
+    // ALTER ADD es aditivo: no toca datos existentes. Guardado por COL_LENGTH
+    // para que sea idempotente si ya se corrió el script SQL a mano.
+    await pool.request().batch(`
+      IF COL_LENGTH('dbo.gastos_viaje', 'foto') IS NULL
+        ALTER TABLE dbo.gastos_viaje ADD foto VARBINARY(MAX) NULL;
+    `)
+    await pool.request().batch(`
+      IF COL_LENGTH('dbo.gastos_viaje', 'foto_mime') IS NULL
+        ALTER TABLE dbo.gastos_viaje ADD foto_mime NVARCHAR(64) NULL;
+    `)
+    await pool.request().batch(`
+      IF COL_LENGTH('dbo.gastos_viaje', 'foto_subida_at') IS NULL
+        ALTER TABLE dbo.gastos_viaje ADD foto_subida_at DATETIME2(3) NULL;
+    `)
+
     this.schemaReady = true
-    console.log('✅ [AdminDB] Esquema verificado (gastos_viaje, aprobaciones_viaje)')
+    console.log('✅ [AdminDB] Esquema verificado (gastos_viaje, aprobaciones_viaje, foto)')
   }
 
   /** Request listo para usar, con el esquema ya garantizado. */

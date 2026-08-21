@@ -43,9 +43,24 @@ app.get('/health', (req, res) => {
 })
 
 // Manejo de errores global
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Payload demasiado grande: lo tira body-parser antes de llegar a la ruta,
+  // así que hay que traducirlo acá o el usuario ve un 500 genérico en inglés.
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    console.error('Error: payload demasiado grande')
+    return res.status(413).json({
+      success: false,
+      error: 'La foto es demasiado grande. Sacá la foto de nuevo o usá una de menor resolución.',
+    })
+  }
+
+  // JSON mal formado
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({ success: false, error: 'El cuerpo de la petición no es JSON válido' })
+  }
+
   console.error('Error:', err)
-  res.status(500).json({ message: err.message || 'Error interno del servidor' })
+  res.status(500).json({ success: false, error: err?.message || 'Error interno del servidor' })
 })
 
 app.listen(PORT, () => {

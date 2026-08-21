@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo } from 'react'
+﻿import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck,
@@ -49,6 +49,7 @@ interface GastoAPI {
   Cantidad_CORMVI:    number         // CANTIDAD CORMVI: -1 débito / 1 crédito
   // ── Sólo para gastos guardados en dibiagi_admin_db ────────────
   _localId?:          string         // id en dbo.gastos_viaje → habilita la edición
+  _tieneFoto?:        boolean        // hay imagen del ticket adjunta
   [key: string]:      any            // otros campos técnicos adicionales
 }
 
@@ -137,6 +138,13 @@ export default function AdminViajeDetalle() {
   const [guardando, setGuardando] = useState(false)
   const [errorEdicion, setErrorEdicion] = useState('')
 
+  // Edición inline celda por celda
+  const [celdaGuardando, setCeldaGuardando] = useState<string | null>(null)
+  const [errorCelda, setErrorCelda] = useState('')
+
+  // Visor de la foto del ticket
+  const [fotoAmpliada, setFotoAmpliada] = useState<{ url: string; titulo: string } | null>(null)
+
   const adminData = JSON.parse(sessionStorage.getItem('admin_user') || '{}')
   const estaAprobado = !!aprobacion
 
@@ -177,6 +185,7 @@ export default function AdminViajeDetalle() {
       Valor_Caja_Camion:   g.valorCajaCamion ?? null,
       Cantidad_CORMVI:     g.cantidadCormvi ?? -1,
       _localId:            g.id,
+      _tieneFoto:          !!g.tieneFoto,
     }
   }
 
@@ -272,6 +281,35 @@ export default function AdminViajeDetalle() {
       if (res.ok) setAprobacion(null)
     } catch (err) {
       console.error('Error al revocar:', err)
+    }
+  }
+
+  /**
+   * Guarda un solo campo de un gasto (edición inline).
+   * Actualiza la fila en memoria con lo que devuelve el servidor, en vez de
+   * recargar todo: la tabla es ancha y un reload completo perdería el scroll.
+   */
+  const guardarCampo = async (gastoId: string, campo: string, valor: any) => {
+    setCeldaGuardando(`${gastoId}:${campo}`)
+    setErrorCelda('')
+    try {
+      const res = await fetch(`${API_URL}/gastos-viaje/${gastoId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [campo]: valor }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) throw new Error(data.error || `Error ${res.status}`)
+
+      // Reemplazar sólo la fila afectada
+      const actualizado = localGastoToAPI(data.data)
+      setGastos(prev => prev.map(g => (g._localId === gastoId ? actualizado : g)))
+    } catch (err) {
+      setErrorCelda(err instanceof Error ? err.message : 'No se pudo guardar el cambio')
+      // Que el error no quede colgado en pantalla para siempre
+      setTimeout(() => setErrorCelda(''), 6000)
+    } finally {
+      setCeldaGuardando(null)
     }
   }
 
@@ -595,6 +633,7 @@ export default function AdminViajeDetalle() {
                 <thead>
                   <tr className="bg-white/[0.04] border-b-2 border-white/[0.08]">
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider sticky left-0 bg-[#161821] min-w-[40px]">#</th>
+                    <th className="text-center py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[76px]">Ticket</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Proveedor</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[180px]">Tipo Producto Original</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[180px]">Cód. Producto Original</th>
@@ -621,56 +660,115 @@ export default function AdminViajeDetalle() {
                   </tr>
                 </thead>
                 <tbody>
-                  {registrosCormvi.map((reg, i) => (
-                    <tr key={i} className="border-t border-white/[0.05] hover:bg-white/[0.03] transition-colors">
-                      <td className="py-3.5 px-4 text-gray-500 font-bold sticky left-0 bg-[#0f1117]">{i + 1}</td>
-                      <td className="py-3.5 px-4 text-gray-400">{reg.CORMVI_NROCTA || <span className="text-gray-700">—</span>}</td>
-                      <td className="py-3.5 px-4 text-blue-400 font-bold">{reg.CORMVI_TIPORI}</td>
-                      <td className="py-3.5 px-4 text-blue-300 font-semibold">{reg.CORMVI_ARTORI}</td>
-                      <td className="py-3.5 px-4 text-purple-400 font-semibold">{reg.CORMVI_TIPCPT || <span className="text-gray-700">—</span>}</td>
-                      <td className="py-3.5 px-4 text-purple-300 font-semibold">{reg.CORMVI_CODCPT || <span className="text-gray-700">—</span>}</td>
-                      <td className="py-3.5 px-4 text-gray-500">{reg.CORMVI_COFLIS || <span className="text-gray-700">—</span>}</td>
-                      <td className="py-3.5 px-4">
-                        <span className={`px-2.5 py-1 rounded-md text-xs font-bold ${
-                          reg.USR_CORMVI_NLIIVA === 'S'
-                            ? 'bg-amber-500/15 text-amber-300'
-                            : 'bg-emerald-500/15 text-emerald-300'
-                        }`}>
-                          {reg.USR_CORMVI_NLIIVA}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-right text-gray-200">{reg.USR_CORMVI_CANTID}</td>
-                      <td className="py-3.5 px-4 text-right text-white font-bold">{formatImporte(reg.USR_CORMVI_PRECIO)}</td>
-                      <td className="py-3.5 px-4 text-gray-300">{reg.USR_CORMVI_PERLIQ}</td>
-                      <td className="py-3.5 px-4 text-gray-300">{reg.USR_CORMVI_EMPLEG || <span className="text-gray-700">—</span>}</td>
-                      <td className="py-3.5 px-4 text-gray-200 font-semibold">{reg.USR_CORMVI_NROLEG || <span className="text-gray-700 font-normal">—</span>}</td>
-                      <td className="py-3.5 px-4 text-gray-200 font-semibold">{reg.USR_CORMVI_NROVIA}</td>
-                      <td className="py-3.5 px-4 text-gray-400">{reg.USR_CORMVI_NROFOR.slice(-8)}</td>
-                      <td className="py-3.5 px-4 text-gray-200 font-semibold">{reg.USR_CORMVI_PATTRA || <span className="text-gray-700 font-normal">—</span>}</td>
-                      <td className="py-3.5 px-4 text-gray-300">{reg.USR_CORMVI_FCHCAL}</td>
-                      <td className="py-3.5 px-4 text-gray-500">{reg.USR_CORMVI_COSAVI || <span className="text-gray-700">—</span>}</td>
-                      <td className="py-3.5 px-4 text-right text-gray-400">{reg.USR_CORMVI_VAITSE}</td>
-                      <td className="py-3.5 px-4 text-gray-200">{reg.USR_CORMVI_NOMLEG || <span className="text-gray-700">—</span>}</td>
-                      <td className="py-3.5 px-4 text-gray-500">{reg.USR_CORMVI_CAJCAM || <span className="text-gray-700">—</span>}</td>
-                      <td className="py-3.5 px-4 text-right text-gray-300">{formatImporte(reg.CORMVI_PRECIO)}</td>
-                      <td className="py-3.5 px-4 text-right text-gray-300">{reg.CORMVI_CANTID}</td>
-                      <td className="py-3.5 px-4 text-center">
-                        {gastos[i]?._localId ? (
-                          <button
-                            onClick={() => abrirEdicion(gastos[i])}
-                            title="Editar este gasto"
-                            className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-blue-500/20 text-gray-400 hover:text-blue-300 border border-white/[0.08] transition-all inline-flex items-center justify-center"
-                          >
-                            <FaPen className="text-[10px]" />
-                          </button>
-                        ) : (
-                          <span className="text-gray-700 text-[10px]" title="Gasto de la API externa — no editable acá">API</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {registrosCormvi.map((reg, i) => {
+                    const g = gastos[i]
+                    const id = g?._localId
+                    // Sólo los gastos guardados en dibiagi_admin_db se pueden editar.
+                    // Los que vienen de la API de portería son de solo lectura.
+                    const celda = (campo: string, extra: Partial<PropsCelda> = {}) => ({
+                      gastoId: id,
+                      campo,
+                      guardando: celdaGuardando === `${id}:${campo}`,
+                      onGuardar: guardarCampo,
+                      ...extra,
+                    })
+
+                    return (
+                      <tr key={g?._localId || i} className="border-t border-white/[0.05] hover:bg-white/[0.03] transition-colors group">
+                        <td className="py-3.5 px-4 text-gray-500 font-bold sticky left-0 bg-[#0f1117]">{i + 1}</td>
+
+                        {/* Foto del ticket */}
+                        <td className="py-2 px-4 text-center">
+                          {id && g?._tieneFoto ? (
+                            <button
+                              onClick={() => setFotoAmpliada({
+                                url: `${API_URL}/gastos-viaje/${id}/foto`,
+                                titulo: `${reg.CORMVI_TIPORI}/${reg.CORMVI_ARTORI} · $ ${formatImporte(reg.USR_CORMVI_PRECIO)}`,
+                              })}
+                              title="Ver el ticket en grande"
+                              className="w-12 h-12 rounded-md overflow-hidden border border-white/[0.1] hover:border-blue-400/60 transition-all inline-block bg-black/30"
+                            >
+                              <img
+                                src={`${API_URL}/gastos-viaje/${id}/foto`}
+                                alt="Ticket"
+                                loading="lazy"
+                                className="w-full h-full object-cover"
+                              />
+                            </button>
+                          ) : (
+                            <span className="text-gray-700 text-[10px]" title="Sin foto adjunta">—</span>
+                          )}
+                        </td>
+
+                        <Celda {...celda('codigoProveedor')} valor={reg.CORMVI_NROCTA} className="text-gray-400" />
+                        <Celda {...celda('tipoProducto')}    valor={reg.CORMVI_TIPORI} className="text-blue-400 font-bold" />
+                        <Celda {...celda('codigoArticulo')}  valor={reg.CORMVI_ARTORI} className="text-blue-300 font-semibold" />
+
+                        {/* Constantes del formato CORMVI — no se editan */}
+                        <td className="py-3.5 px-4 text-purple-400 font-semibold" title="Constante del formato CORMVI">{reg.CORMVI_TIPCPT}</td>
+                        <td className="py-3.5 px-4 text-purple-300 font-semibold" title="Constante del formato CORMVI">{reg.CORMVI_CODCPT}</td>
+                        <td className="py-3.5 px-4 text-gray-500" title="Constante del formato CORMVI">{reg.CORMVI_COFLIS}</td>
+
+                        <Celda
+                          {...celda('formalidad')}
+                          valor={reg.USR_CORMVI_NLIIVA}
+                          tipo="select"
+                          opciones={[{ v: 'INFORMAL', label: 'S — Informal' }, { v: 'FORMAL', label: 'N — Formal' }]}
+                          valorEdicion={reg.USR_CORMVI_NLIIVA === 'S' ? 'INFORMAL' : 'FORMAL'}
+                          render={(v) => (
+                            <span className={`px-2.5 py-1 rounded-md text-xs font-bold ${
+                              v === 'S' ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'
+                            }`}>{v}</span>
+                          )}
+                        />
+
+                        <Celda {...celda('cantidad')} valor={reg.USR_CORMVI_CANTID} tipo="number" alinear="right" className="text-gray-200" />
+                        <Celda {...celda('importe')}  valor={reg.USR_CORMVI_PRECIO}  tipo="number" alinear="right"
+                               className="text-white font-bold" render={(v) => formatImporte(Number(v))} />
+
+                        {/* Derivado de la fecha — se cambia editando Fecha Salida */}
+                        <td className="py-3.5 px-4 text-gray-300" title="Se deriva de la Fecha Salida">{reg.USR_CORMVI_PERLIQ}</td>
+
+                        <Celda {...celda('empresaChofer')}  valor={reg.USR_CORMVI_EMPLEG} className="text-gray-300" />
+                        <Celda {...celda('legajoChofer')}   valor={reg.USR_CORMVI_NROLEG} className="text-gray-200 font-semibold" />
+                        <Celda {...celda('nroViaje')}       valor={reg.USR_CORMVI_NROVIA} tipo="number" className="text-gray-200 font-semibold" />
+                        <Celda {...celda('rendicion')}      valor={reg.USR_CORMVI_NROFOR} className="text-gray-400"
+                               render={(v) => String(v).slice(-8)} />
+                        <Celda {...celda('patenteTractor')} valor={reg.USR_CORMVI_PATTRA} className="text-gray-200 font-semibold" />
+                        <Celda
+                          {...celda('fecha')}
+                          valor={reg.USR_CORMVI_FCHCAL}
+                          tipo="date"
+                          className="text-gray-300"
+                          valorEdicion={reg.USR_CORMVI_FCHCAL ? String(reg.USR_CORMVI_FCHCAL).split(' ')[0] : ''}
+                          render={(v) => (v ? String(v).split(' ')[0] : '')}
+                        />
+                        <Celda {...celda('coeficienteViaje')}      valor={reg.USR_CORMVI_COSAVI} tipo="number" className="text-gray-500" />
+                        <Celda {...celda('valorItemSeleccionado')} valor={reg.USR_CORMVI_VAITSE} tipo="number" alinear="right" className="text-gray-400" />
+                        <Celda {...celda('chofer')}                valor={reg.USR_CORMVI_NOMLEG} className="text-gray-200" />
+                        <Celda {...celda('valorCajaCamion')}       valor={reg.USR_CORMVI_CAJCAM} tipo="number" className="text-gray-500" />
+                        <Celda {...celda('importe')}               valor={reg.CORMVI_PRECIO} tipo="number" alinear="right"
+                               className="text-gray-300" render={(v) => formatImporte(Number(v))} />
+                        <Celda {...celda('cantidadCormvi')}        valor={reg.CORMVI_CANTID} tipo="number" alinear="right" className="text-gray-300" />
+
+                        <td className="py-3.5 px-4 text-center">
+                          {id ? (
+                            <button
+                              onClick={() => abrirEdicion(g)}
+                              title="Editar todos los campos de este gasto"
+                              className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-blue-500/20 text-gray-400 hover:text-blue-300 border border-white/[0.08] transition-all inline-flex items-center justify-center"
+                            >
+                              <FaPen className="text-[10px]" />
+                            </button>
+                          ) : (
+                            <span className="text-gray-700 text-[10px]" title="Gasto de la API externa — no editable acá">API</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
                   <tr className="border-t-2 border-white/[0.08] bg-white/[0.03]">
-                    <td colSpan={9} className="py-4 px-4 text-right font-bold text-gray-400 text-xs uppercase tracking-wider">TOTAL</td>
+                    <td colSpan={10} className="py-4 px-4 text-right font-bold text-gray-400 text-xs uppercase tracking-wider">TOTAL</td>
                     <td className="py-4 px-4 text-right font-bold text-white text-base">
                       {formatImporte(totalImporte)}
                     </td>
@@ -682,6 +780,47 @@ export default function AdminViajeDetalle() {
           </div>
         )}
       </div>
+
+      {/* ══ Aviso flotante si falla una edición inline ══ */}
+      {errorCelda && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-3 rounded-xl bg-red-950/95 border border-red-500/30 shadow-2xl backdrop-blur-sm">
+          <FaExclamationTriangle className="text-red-400 text-xs flex-shrink-0" />
+          <p className="text-xs text-red-300">{errorCelda}</p>
+        </div>
+      )}
+
+      {/* ══ Visor de la foto del ticket ══ */}
+      {fotoAmpliada && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-black/90 backdrop-blur-sm p-4"
+          onClick={() => setFotoAmpliada(null)}
+        >
+          <div className="flex items-center gap-3 mb-3 max-w-full" onClick={(e) => e.stopPropagation()}>
+            <p className="text-sm text-gray-300 font-medium truncate">{fotoAmpliada.titulo}</p>
+            <a
+              href={fotoAmpliada.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/[0.08] hover:bg-white/[0.14] text-gray-200 transition-all flex-shrink-0"
+            >
+              <FaDownload className="text-[10px]" /> Abrir original
+            </a>
+            <button
+              onClick={() => setFotoAmpliada(null)}
+              className="w-8 h-8 rounded-lg bg-white/[0.08] hover:bg-white/[0.14] flex items-center justify-center text-gray-300 transition-all flex-shrink-0"
+            >
+              <FaTimes className="text-xs" />
+            </button>
+          </div>
+          <img
+            src={fotoAmpliada.url}
+            alt="Ticket"
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-full max-h-[82vh] object-contain rounded-lg border border-white/[0.1]"
+          />
+          <p className="text-[11px] text-gray-600 mt-3">Clic fuera de la imagen para cerrar</p>
+        </div>
+      )}
 
       {/* ══ Modal de edición ══ */}
       {editando && (
@@ -797,6 +936,125 @@ export default function AdminViajeDetalle() {
         </div>
       )}
     </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   CELDA EDITABLE — un lápiz por columna
+   Click en el lápiz → input inline. Enter guarda, Escape cancela.
+   Si no hay `gastoId` (gasto de la API externa) es sólo lectura.
+   ══════════════════════════════════════════════════════════════════ */
+interface PropsCelda {
+  valor: any
+  campo: string
+  gastoId?: string
+  guardando?: boolean
+  onGuardar?: (gastoId: string, campo: string, valor: any) => Promise<void>
+  tipo?: 'text' | 'number' | 'date' | 'select'
+  opciones?: { v: string; label: string }[]
+  /** Valor que se carga en el input, si difiere del que se muestra */
+  valorEdicion?: any
+  /** Cómo se pinta el valor cuando NO se está editando */
+  render?: (v: any) => React.ReactNode
+  className?: string
+  alinear?: 'left' | 'right'
+}
+
+function Celda({
+  valor, campo, gastoId, guardando, onGuardar,
+  tipo = 'text', opciones, valorEdicion, render,
+  className = '', alinear = 'left',
+}: PropsCelda) {
+  const [editando, setEditando] = useState(false)
+  const [borrador, setBorrador] = useState('')
+  const inputRef = useRef<HTMLInputElement | HTMLSelectElement | null>(null)
+
+  useEffect(() => {
+    if (editando) inputRef.current?.focus()
+  }, [editando])
+
+  const editable = !!gastoId && !!onGuardar
+  const vacio = valor === null || valor === undefined || valor === ''
+
+  const abrir = () => {
+    setBorrador(String(valorEdicion ?? valor ?? ''))
+    setEditando(true)
+  }
+
+  const confirmar = async () => {
+    setEditando(false)
+    const original = String(valorEdicion ?? valor ?? '')
+    if (borrador === original) return          // sin cambios, no molestamos al servidor
+
+    let payload: any = borrador
+    if (tipo === 'number') {
+      payload = borrador === '' ? null : parseFloat(borrador)
+      if (payload !== null && isNaN(payload)) return
+    }
+    if (tipo === 'date') {
+      payload = borrador ? new Date(borrador).toISOString() : null
+      if (!borrador) return                    // la fecha no puede quedar vacía
+    }
+    await onGuardar!(gastoId!, campo, payload)
+  }
+
+  const alineacion = alinear === 'right' ? 'text-right' : ''
+
+  if (editando) {
+    return (
+      <td className={`py-2 px-2 ${alineacion}`}>
+        {tipo === 'select' ? (
+          <select
+            ref={inputRef as React.RefObject<HTMLSelectElement>}
+            value={borrador}
+            onChange={(e) => setBorrador(e.target.value)}
+            onBlur={confirmar}
+            onKeyDown={(e) => { if (e.key === 'Escape') setEditando(false) }}
+            className="w-full bg-[#0b0d13] border border-blue-500/60 rounded px-2 py-1.5 text-xs text-white focus:outline-none"
+          >
+            {opciones?.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+          </select>
+        ) : (
+          <input
+            ref={inputRef as React.RefObject<HTMLInputElement>}
+            type={tipo === 'number' ? 'number' : tipo === 'date' ? 'date' : 'text'}
+            step={tipo === 'number' ? 'any' : undefined}
+            value={borrador}
+            onChange={(e) => setBorrador(e.target.value)}
+            onBlur={confirmar}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); confirmar() }
+              if (e.key === 'Escape') setEditando(false)
+            }}
+            className={`w-full min-w-[80px] bg-[#0b0d13] border border-blue-500/60 rounded px-2 py-1.5 text-xs text-white focus:outline-none ${alineacion}`}
+          />
+        )}
+      </td>
+    )
+  }
+
+  return (
+    <td className={`py-3.5 px-4 ${alineacion} ${className}`}>
+      <span className="inline-flex items-center gap-1.5 max-w-full">
+        <span className="truncate">
+          {guardando
+            ? <FaSpinner className="animate-spin text-blue-400 text-[11px]" />
+            : vacio
+              ? <span className="text-gray-700">—</span>
+              : (render ? render(valor) : valor)
+          }
+        </span>
+        {editable && !guardando && (
+          <button
+            onClick={abrir}
+            title={`Editar ${campo}`}
+            className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-600 hover:text-blue-400 transition-all flex-shrink-0"
+          >
+            <FaPen className="text-[9px]" />
+          </button>
+        )}
+      </span>
+    </td>
   )
 }
 
