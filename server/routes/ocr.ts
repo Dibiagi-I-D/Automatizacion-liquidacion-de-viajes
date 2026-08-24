@@ -6,6 +6,57 @@ const router = Router()
 // Gemini 2.5 Flash — rápido, gratuito y multimodal
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
+/**
+ * Pares TIPPRO/ARTCOD válidos para rendición (formulario RRFF).
+ * Se usan como enum del responseSchema: el modelo solo puede elegir uno de estos,
+ * así que una clasificación inexistente deja de ser posible.
+ * Debe mantenerse sincronizado con CONCEPTOS_ACTIVOS de server/routes/conceptos.ts.
+ */
+const CONCEPTOS_VALIDOS = [
+  'TARIFA/1',  'TARIFA/2',  'TARIFA/3',  'TARIFA/4',  'TARIFA/5',
+  'TARIFA/6',  'TARIFA/7',  'TARIFA/8',  'TARIFA/10', 'TARIFA/11',
+  'TARIFA/12', 'TARIFA/13', 'TARIFA/14', 'TARIFA/21',
+  'HONPRO/2',  'HONPRO/3',  'HONPRO/4',  'HONPRO/5',  'HONPRO/6',
+  'NEUMAT/1',  'NEUMAT/2',  'NEUMAT/3',
+  'COMBLU/3',  'COMBLU/9',
+  'SERVIC/3',
+] as const
+
+/** Concepto por defecto cuando no hay coincidencia clara: Gastos extras (Caja Camión) */
+const CONCEPTO_FALLBACK = 'TARIFA/14'
+
+const esperar = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+/**
+ * POST a Gemini reintentando ante fallas transitorias.
+ *
+ * 503 ("high demand") y 429 (rate limit) son temporales y frecuentes en horas pico.
+ * Sin reintento, el chofer ve un error y tiene que volver a sacar la foto — con el
+ * costo de subida que eso implica desde la ruta. Dos reintentos cortos resuelven
+ * la mayoría sin que se entere.
+ */
+async function postearAGeminiConReintento(url: string, body: any, config: any, intentos = 3) {
+  let ultimoError: any
+
+  for (let intento = 1; intento <= intentos; intento++) {
+    try {
+      return await axios.post(url, body, config)
+    } catch (error: any) {
+      ultimoError = error
+      const status = error.response?.status
+      const esTransitorio = status === 503 || status === 429
+
+      if (!esTransitorio || intento === intentos) throw error
+
+      const esperaMs = 1200 * intento  // 1,2s y luego 2,4s
+      console.warn(`[OCR] Gemini respondió ${status}, reintento ${intento}/${intentos - 1} en ${esperaMs}ms`)
+      await esperar(esperaMs)
+    }
+  }
+
+  throw ultimoError
+}
+
 // ════════════════════════════════════════════
 // POST /api/ocr/scan
 // Recibe imagen base64, usa Gemini para extraer datos del ticket
@@ -32,25 +83,30 @@ router.post('/scan', async (req: Request, res: Response) => {
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg'
     const base64Image = image.replace(/^data:image\/\w+;base64,/, '')
 
-    console.log('[OCR] Enviando imagen a Gemini 1.5 Flash...')
+    console.log('[OCR] Enviando imagen a Gemini 2.5 Flash...')
     console.log(`[OCR] Tamaño base64: ${(base64Image.length / 1024).toFixed(0)} KB`)
 
     // Prompt optimizado para extracción de datos de tickets + clasificación Softland
+    //
+    // NO se pide transcripción del ticket: generar texto es la parte secuencial y lenta
+    // de la inferencia, y el texto completo solo alimentaba un panel informativo.
+    // Sin él, el modelo escribe ~40 palabras en vez de varios cientos.
+    //
+    // El formato lo garantiza responseSchema (abajo), no el prompt: por eso acá ya no
+    // hace falta pedir "solo JSON, sin markdown" ni describir la forma de la respuesta.
     const prompt = `Analizá esta imagen de un ticket/factura/recibo/comprobante de pago de una empresa de transporte de camiones.
 
-Extraé los siguientes datos y devolvelos ÚNICAMENTE como JSON válido (sin markdown, sin \`\`\`, solo el JSON):
+Tu única tarea es extraer los datos con la mayor exactitud posible. Concentrate en leer bien
+el importe y la fecha: son los dos campos que después se controlan a mano si están mal.
 
-{
-  "importe": (número decimal del TOTAL a pagar, el monto final más importante del ticket. Si hay "TOTAL", usá ese valor. Solo el número, sin símbolo de moneda),
-  "fecha": (fecha de EMISIÓN o de la TRANSACCIÓN en formato YYYY-MM-DD. IMPORTANTE: usá la fecha en que se realizó la compra/pago, NO la fecha de vencimiento, NO la fecha de CAI, NO la fecha de validez. Buscá palabras como "Fecha:", "Fecha emisión:", "Date:", o la fecha que aparece al inicio del ticket junto con la hora. Si hay varias fechas, elegí la más antigua que corresponda a cuándo se hizo la operación. Devolvé "" si no se encuentra),
-  "pais": (código de país: "ARG" para Argentina, "CHL" para Chile, "URY" para Uruguay, o "" si no se puede determinar. Detectalo por CUIT/AFIP/IVA 21%=Argentina, RUT/SII/IVA 19%=Chile, RUC/DGI/IVA 22%=Uruguay),
-  "descripcion": (nombre del comercio o establecimiento, máximo 120 caracteres, o ""),
-  "tipoProducto": (TIPPRO: código del tipo de producto según la tabla de abajo. OBLIGATORIO, nunca vacío),
-  "codigoArticulo": (ARTCOD: código del artículo según la tabla de abajo. OBLIGATORIO, nunca vacío),
-  "formalidad": (clasificación fiscal: "FORMAL" o "INFORMAL". Ver reglas de formalidad abajo. OBLIGATORIO, nunca vacío),
-  "proveedor": (nombre o razón social del proveedor/emisor del ticket, máximo 120 caracteres. Si no se puede identificar, devolvé ""),
-  "textoCompleto": (todo el texto visible en el ticket, preservando saltos de línea)
-}
+Campos a completar:
+- importe: el TOTAL a pagar, el monto final del ticket. Solo el número, sin símbolo de moneda.
+- fecha: la fecha de EMISIÓN o de la TRANSACCIÓN, en formato YYYY-MM-DD.
+- pais: ARG, CHL o URY.
+- descripcion: nombre del comercio o establecimiento, máximo 120 caracteres.
+- concepto: el par TIPPRO/ARTCOD según la tabla de abajo.
+- formalidad: FORMAL o INFORMAL, según las reglas de abajo.
+- proveedor: razón social del emisor. Si no lo podés identificar con certeza, devolvé "" — no inventes.
 
 CONTEXTO: Estás procesando tickets de gastos de una empresa de transporte de camiones (viajes internacionales ARG/CHL/URY).
 
@@ -189,11 +245,9 @@ REGLAS DE EXTRACCIÓN:
 - El "importe" debe ser el TOTAL FINAL del ticket (total a pagar, no subtotales ni IVA por separado)
 - Si hay múltiples totales, elegí el más grande que represente el total a pagar
 - FECHA: Extraé ÚNICAMENTE la fecha de emisión/transacción (cuándo se pagó). IGNORÁ completamente: fechas de vencimiento, "Vto", "Venc", "Válido hasta", "CAI Vto", "Fecha CAI". Si el ticket tiene una fecha junto a la hora (ej: "15/03/2025 14:32"), esa es la fecha de la transacción. Si hay varias fechas, usá la que está al principio del ticket o junto a "Fecha:" / "Date:" / "Emisión:"
-- La fecha debe estar en formato YYYY-MM-DD
-- Para el país, basate en indicadores fiscales (CUIT, RUT, RUC, tipo de IVA, etc.)
-- Respondé SOLO con el JSON, nada más`
+- Para el país, basate en indicadores fiscales (CUIT, RUT, RUC, tipo de IVA, etc.)`
 
-    const geminiResponse = await axios.post(
+    const geminiResponse = await postearAGeminiConReintento(
       `${GEMINI_API_URL}?key=${apiKey}`,
       {
         contents: [
@@ -212,10 +266,31 @@ REGLAS DE EXTRACCIÓN:
           }
         ],
         generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 2048,
+          temperature: 0,          // extracción, no redacción: determinista
+          maxOutputTokens: 400,    // sin transcripción, la respuesta son ~40 palabras
           thinkingConfig: {
             thinkingBudget: 0
+          },
+          // El esquema garantiza la forma de la respuesta: no hay que limpiar
+          // vallas de markdown ni rescatar el JSON con una expresión regular.
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            required: ['importe', 'fecha', 'pais', 'concepto', 'formalidad'],
+            properties: {
+              importe:     { type: 'NUMBER' },
+              fecha:       { type: 'STRING', description: 'YYYY-MM-DD, fecha de emisión' },
+              pais:        { type: 'STRING', enum: ['ARG', 'CHL', 'URY'] },
+              descripcion: { type: 'STRING' },
+              formalidad:  { type: 'STRING', enum: ['FORMAL', 'INFORMAL'] },
+              proveedor:   { type: 'STRING' },
+              // Un solo campo con los 25 pares válidos: así el modelo no puede
+              // devolver combinaciones inexistentes como COMBLU/5.
+              concepto: {
+                type: 'STRING',
+                enum: CONCEPTOS_VALIDOS
+              }
+            }
           }
         }
       },
@@ -238,52 +313,42 @@ REGLAS DE EXTRACCIÓN:
     if (!geminiText.trim()) {
       return res.json({
         success: true,
-        rawText: '',
         datos: { importe: '', fecha: '', pais: '', descripcion: '' },
         mensaje: 'No se pudo leer el ticket. Intentá con una foto más clara.'
       })
     }
 
-    // Parsear el JSON de la respuesta de Gemini
-    let jsonStr = geminiText.trim()
-    jsonStr = jsonStr.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
-
+    // Con responseMimeType 'application/json' la respuesta ya es JSON válido.
+    // El try/catch queda como red de seguridad ante un cambio de la API.
     let datos: any = {}
     try {
-      datos = JSON.parse(jsonStr)
-    } catch (parseErr) {
-      console.warn('[OCR] Error parseando JSON de Gemini, intentando extraer...')
-      console.warn('[OCR] Texto recibido:', jsonStr)
-
-      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        try {
-          datos = JSON.parse(jsonMatch[0])
-        } catch {
-          console.error('[OCR] No se pudo parsear el JSON de Gemini')
-          return res.json({
-            success: true,
-            rawText: geminiText,
-            datos: { importe: '', fecha: '', pais: '', descripcion: '' },
-            mensaje: 'Se leyó el ticket pero no se pudieron extraer los datos automáticamente.'
-          })
-        }
-      }
+      datos = JSON.parse(geminiText)
+    } catch {
+      console.error('[OCR] Gemini devolvió algo que no es JSON:', geminiText.slice(0, 300))
+      return res.json({
+        success: true,
+        datos: { importe: '', fecha: '', pais: '', descripcion: '' },
+        mensaje: 'Se leyó el ticket pero no se pudieron extraer los datos automáticamente.'
+      })
     }
+
+    // "TARIFA/5" → tipoProducto TARIFA, codigoArticulo 5
+    const conceptoRaw = typeof datos.concepto === 'string' && datos.concepto.includes('/')
+      ? datos.concepto
+      : CONCEPTO_FALLBACK
+    const [tipoProducto, codigoArticulo] = conceptoRaw.split('/')
 
     // Normalizar los datos
     const resultado = {
-      importe: datos.importe ? String(datos.importe) : '',
+      importe: (datos.importe !== undefined && datos.importe !== null) ? String(datos.importe) : '',
       fecha: datos.fecha || '',
       pais: datos.pais || '',
       descripcion: datos.descripcion || '',
-      tipoProducto: datos.tipoProducto || '',
-      codigoArticulo: datos.codigoArticulo ? String(datos.codigoArticulo) : '',
+      tipoProducto,
+      codigoArticulo,
       formalidad: (datos.formalidad === 'FORMAL' || datos.formalidad === 'INFORMAL') ? datos.formalidad : 'INFORMAL',
       proveedor: datos.proveedor || '',
     }
-
-    const rawText = datos.textoCompleto || geminiText
 
     console.log('[OCR] Datos extraídos por Gemini:', {
       importe: resultado.importe,
@@ -298,7 +363,6 @@ REGLAS DE EXTRACCIÓN:
 
     return res.json({
       success: true,
-      rawText,
       datos: resultado,
       mensaje: 'Ticket leído correctamente'
     })
@@ -328,6 +392,14 @@ REGLAS DE EXTRACCIÓN:
         return res.status(429).json({
           success: false,
           error: 'Demasiadas solicitudes. Esperá un momento e intentá de nuevo.',
+          details: error.response.data?.error?.message
+        })
+      }
+      // Llega acá solo si los reintentos automáticos tampoco alcanzaron
+      if (error.response.status === 503) {
+        return res.status(503).json({
+          success: false,
+          error: 'El servicio de lectura está saturado en este momento. Probá de nuevo en un minuto — la foto no se perdió.',
           details: error.response.data?.error?.message
         })
       }

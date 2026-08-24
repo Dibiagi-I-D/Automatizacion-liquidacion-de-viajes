@@ -41,7 +41,6 @@ export default function NuevoGasto() {
   const [ocrProcessing, setOcrProcessing] = useState(false)
   const [ocrStatus, setOcrStatus] = useState('')
   const [ocrPreview, setOcrPreview] = useState<string | null>(null)
-  const [ocrRawText, setOcrRawText] = useState<string | null>(null)
   const [showOcrResult, setShowOcrResult] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -107,7 +106,6 @@ export default function NuevoGasto() {
     try {
       setOcrProcessing(true)
       setOcrStatus('Enviando imagen al servidor...')
-      setOcrRawText(null)
       setShowOcrResult(false)
 
       // Crear preview y obtener base64
@@ -144,7 +142,6 @@ export default function NuevoGasto() {
       const data = await response.json()
       console.log('[OCR Google Vision] Resultado:', data)
 
-      setOcrRawText(data.rawText || null)
 
       // Cargar datos extraídos en el formulario
       if (data.datos?.importe) {
@@ -216,7 +213,6 @@ export default function NuevoGasto() {
 
   const limpiarOCR = () => {
     setOcrPreview(null)
-    setOcrRawText(null)
     setShowOcrResult(false)
   }
 
@@ -460,14 +456,7 @@ export default function NuevoGasto() {
                 className="w-24 h-32 object-cover rounded-lg border border-white/[0.06] flex-shrink-0"
               />
               <div className="flex-1 min-w-0">
-                {ocrRawText && (
-                  <div className="text-xs text-gray-400 max-h-40 overflow-y-auto font-mono leading-relaxed bg-white/[0.03] rounded-lg p-3 border border-white/[0.04]">
-                    {ocrRawText.split('\n').filter(l => l.trim()).map((line, i) => (
-                      <div key={i} className="whitespace-pre-wrap break-words">{line}</div>
-                    ))}
-                  </div>
-                )}
-                <div className="mt-2.5 space-y-1.5">
+                <div className="space-y-1.5">
                   {importe && (
                     <p className="text-sm text-emerald-400 font-medium">
                       Importe: ${importe}
