@@ -143,16 +143,25 @@ router.get('/roadmaps-public', async (req: Request, res: Response) => {
 
 /**
  * GET /api/drivers/viaje-activo-public
- * Detectar el viaje activo en tiempo real cruzando:
- *   - USR_GTPOCU (movimientos de entrada/salida del tractor)
- *   - USR_GTVIAH (hojas de ruta con Nro de Viaje real)
- * Devuelve el viaje más reciente que coincida con el último movimiento del tractor.
+ * Detectar la hoja de ruta ABIERTA que corresponde al chofer + tractor del login.
+ *
+ * La hoja se busca sobre USR_GTVIAH cruzando LOS DOS datos del login:
+ *   - patente del tractor  → USR_GTVIAH_PATTRA
+ *   - legajo del chofer    → USR_GTVIAH_NROLEG
+ * Si el chofer no tiene una hoja abierta con ese tractor, no devuelve nada
+ * (found: false) en vez de devolver el viaje de otro chofer.
+ *
+ * USR_GTPOCU (movimientos de portería) entra como LEFT JOIN opcional, solo para
+ * enriquecer la respuesta con el último movimiento (ENTRA/SALE, hora, interno).
+ *
  * Query params:
  *  - patente: Patente del tractor logueado (obligatorio)
+ *  - legajo:  Legajo del chofer logueado   (opcional pero recomendado —
+ *             sin él se mantiene el comportamiento anterior, solo por patente)
  */
 router.get('/viaje-activo-public', async (req: Request, res: Response) => {
   try {
-    const { patente } = req.query;
+    const { patente, legajo } = req.query;
 
     if (!patente || typeof patente !== 'string') {
       return res.status(400).json({
@@ -162,22 +171,26 @@ router.get('/viaje-activo-public', async (req: Request, res: Response) => {
     }
 
     const patenteNorm = patente.trim().toUpperCase();
-    console.log(`🔍 [Viaje Activo] Buscando viaje para patente: ${patenteNorm}`);
+    // El legajo viene padeado desde la API de choferes (ej: '   455').
+    // Se compara sin espacios contra USR_GTVIAH_NROLEG, que también está padeado.
+    const legajoNorm = typeof legajo === 'string' ? legajo.trim() : '';
 
-    // QUERY PRINCIPAL: Cruzar último movimiento del tractor (USR_GTPOCU)
-    // con la hoja de ruta más reciente (USR_GTVIAH) para la misma patente
+    console.log(
+      `🔍 [Viaje Activo] Buscando hoja abierta — patente: ${patenteNorm}` +
+      (legajoNorm ? ` | legajo: ${legajoNorm}` : ' | (sin legajo: match solo por patente)')
+    );
+
+    // El legajo es el filtro que evita devolver el viaje de otro chofer
+    const filtroLegajo = legajoNorm
+      ? 'AND LTRIM(RTRIM(h.USR_GTVIAH_NROLEG)) = @legajo'
+      : '';
+
     const query = `
       SELECT TOP 1
-        p.USR_GTPOCU_INGSAL AS TipoMovimiento,
-        p.USR_GTPOCU_FECHAC AS FechaMovimiento,
-        p.USR_GTPOCU_HORACO AS HoraMovimiento,
-        p.USR_GTPOCU_TRACTO AS Patente,
-        p.USR_GTPOCU_CHONOM AS Chofer,
-        p.USR_GTPOCU_ORIGEN AS OrigenMovimiento,
-        p.USR_GTPOCU_DESTIN AS DestinoMovimiento,
-        p.USR_GTPOCU_INTTRA AS NumeroInterno,
         h.USR_GTVIAH_NROVIA AS NroViaje,
         h.USR_GTVIAH_CODEMP AS CodEmpresa,
+        h.USR_GTVIAH_NROLEG AS LegajoHR,
+        h.USR_GTVIAH_EMPLEG AS EmpresaLegajoHR,
         h.USR_GTVIAH_CERRAD AS Cerrado,
         h.USR_GTVIAH_FSALID AS FechaSalida,
         h.USR_GTVIAH_FLLEGA AS FechaLlegada,
@@ -187,31 +200,49 @@ router.get('/viaje-activo-public', async (req: Request, res: Response) => {
         h.USR_GTVIAH_ORIGEN AS OrigenHR,
         h.USR_GTVIAH_DESTIN AS DestinoHR,
         h.USR_GTVIAH_TEXTOS AS Observaciones,
-        h.USR_GTVIAH_LIQUID AS Liquidado
-      FROM USR_GTPOCU p
-      INNER JOIN USR_GTVIAH h 
-        ON p.USR_GTPOCU_TRACTO = h.USR_GTVIAH_PATTRA
+        h.USR_GTVIAH_LIQUID AS Liquidado,
+        h.USR_GTVIAH_INTTRA AS NumeroInterno,
+        mov.USR_GTPOCU_INGSAL AS TipoMovimiento,
+        mov.USR_GTPOCU_FECHAC AS FechaMovimiento,
+        mov.USR_GTPOCU_HORACO AS HoraMovimiento,
+        mov.USR_GTPOCU_ORIGEN AS OrigenMovimiento,
+        mov.USR_GTPOCU_DESTIN AS DestinoMovimiento
+      FROM USR_GTVIAH h
+      OUTER APPLY (
+        SELECT TOP 1
+          p.USR_GTPOCU_INGSAL, p.USR_GTPOCU_FECHAC, p.USR_GTPOCU_HORACO,
+          p.USR_GTPOCU_ORIGEN, p.USR_GTPOCU_DESTIN
+        FROM USR_GTPOCU p
+        WHERE p.USR_GTPOCU_TRACTO = h.USR_GTVIAH_PATTRA
+        ORDER BY p.USR_GTPOCU_FECHAC DESC, p.USR_GTPOCU_HORACO DESC
+      ) mov
+      WHERE h.USR_GTVIAH_PATTRA = @patente
+        ${filtroLegajo}
         AND h.USR_GTVIAH_ANULAD = 'N'
-        AND h.USR_GT_DEBAJA = 'N'
-      WHERE p.USR_GTPOCU_TRACTO = @patente
-        AND DATEDIFF(DAY, TRY_CONVERT(date, p.USR_GTPOCU_FECHAC), CONVERT(date, GETDATE())) <= 10
-      ORDER BY p.USR_GTPOCU_FECHAC DESC, p.USR_GTPOCU_HORACO DESC, h.USR_GTVIAH_NROVIA DESC
+        AND h.USR_GT_DEBAJA     = 'N'
+        AND h.USR_GTVIAH_CERRAD = 'N'
+      ORDER BY h.USR_GTVIAH_NROVIA DESC
     `;
 
-    const resultados = await sqlServerService.query(query, { patente: patenteNorm });
+    const params: Record<string, any> = { patente: patenteNorm };
+    if (legajoNorm) params.legajo = legajoNorm;
+
+    const resultados = await sqlServerService.query(query, params);
 
     if (resultados.length === 0) {
-      console.log(`⚠️ No se encontró viaje activo para ${patenteNorm}`);
+      console.log(`⚠️ Sin hoja de ruta abierta para ${patenteNorm}${legajoNorm ? ` / legajo ${legajoNorm}` : ''}`);
       return res.json({
         success: true,
         found: false,
-        message: 'No se encontraron viajes recientes para este tractor',
+        message: legajoNorm
+          ? `El tractor ${patenteNorm} no tiene una hoja de ruta abierta asignada al legajo ${legajoNorm}`
+          : `El tractor ${patenteNorm} no tiene una hoja de ruta abierta`,
         data: null
       });
     }
 
     const r = resultados[0];
-    console.log(`✅ Viaje activo: ${r.NroViaje} (${r.TipoMovimiento}) — ${r.ChoferHR}`);
+    console.log(`✅ Hoja de ruta ${r.NroViaje} — ${(r.ChoferHR || '').trim()} (leg ${(r.LegajoHR || '').trim()}) — ${r.PatenteHR}`);
 
     res.json({
       success: true,
@@ -220,14 +251,17 @@ router.get('/viaje-activo-public', async (req: Request, res: Response) => {
       data: {
         nroViaje: r.NroViaje,
         codEmpresa: r.CodEmpresa,
-        patente: r.Patente,
+        patente: r.PatenteHR,
         numeroInterno: r.NumeroInterno,
+        // Datos del chofer según la hoja de ruta (fuente de verdad para la imputación)
+        chofer: r.ChoferHR,
+        legajoChofer: r.LegajoHR,
+        empresaChofer: r.EmpresaLegajoHR,
         tipoMovimiento: r.TipoMovimiento,
         fechaMovimiento: r.FechaMovimiento,
         horaMovimiento: r.HoraMovimiento,
         origenMovimiento: r.OrigenMovimiento,
         destinoMovimiento: r.DestinoMovimiento,
-        chofer: r.ChoferHR,
         patenteSemi: r.PatenteSemi,
         fechaSalida: r.FechaSalida,
         fechaLlegada: r.FechaLlegada,

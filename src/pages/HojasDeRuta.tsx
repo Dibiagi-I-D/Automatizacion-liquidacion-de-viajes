@@ -75,20 +75,30 @@ export default function HojasDeRuta() {
       setError('')
 
       const patenteTractor = chofer?.interno || ''
+      const legajoChofer = (chofer?.legajo || '').trim()
 
-      // PASO 1: Intentar detectar viaje activo en tiempo real desde SQL Server
-      // (cruza USR_GTPOCU con USR_GTVIAH para obtener el Nro de Viaje real)
+      // PASO 1: Buscar la hoja de ruta ABIERTA que corresponde al chofer + tractor
+      // del login. El backend cruza USR_GTVIAH_PATTRA con USR_GTVIAH_NROLEG, así que
+      // si el tractor no es el de este chofer, no devuelve nada (found: false).
+      let sqlDisponible = true
       try {
         if (patenteTractor) {
-          console.log('🛰️ Consultando viaje activo en tiempo real para:', patenteTractor)
-          const viajeResponse = await fetch(`${API_URL}/drivers/viaje-activo-public?patente=${encodeURIComponent(patenteTractor)}`)
+          console.log('🛰️ Buscando hoja abierta para:', patenteTractor, '| legajo:', legajoChofer)
+          const viajeResponse = await fetch(
+            `${API_URL}/drivers/viaje-activo-public` +
+            `?patente=${encodeURIComponent(patenteTractor)}` +
+            `&legajo=${encodeURIComponent(legajoChofer)}`
+          )
           const viajeData = await viajeResponse.json()
 
-          if (viajeData.success && viajeData.found && viajeData.data?.nroViaje) {
+          // sqlError = SQL Server caído → recién ahí tiene sentido el fallback histórico
+          if (viajeData.sqlError) {
+            sqlDisponible = false
+          } else if (viajeData.success && viajeData.found && viajeData.data?.nroViaje) {
             const viaje = viajeData.data as ViajeActivo
             setViajeActivo(viaje)
             setModoDeteccion('tiempo-real')
-            console.log('✅ Viaje activo detectado en tiempo real:', viaje.nroViaje)
+            console.log('✅ Hoja de ruta asignada:', viaje.nroViaje)
 
             // Construir la hoja de ruta directamente con datos de SQL Server (USR_GTVIAH)
             const hojaSQL: HojaDeRuta = {
@@ -106,12 +116,28 @@ export default function HojasDeRuta() {
             setHojasDeRuta([hojaSQL])
             setLoading(false)
             return // Listo, no necesitamos la API externa
+          } else {
+            // SQL respondió bien y este chofer NO tiene hoja abierta con este tractor.
+            // No hay que caer al fallback: devolvería la hoja de otro chofer.
+            console.log('⛔ Sin hoja abierta para este chofer + tractor')
+            setHojasDeRuta([])
+            setError(
+              `No encontramos una hoja de ruta abierta para ${(chofer as any)?.nombreCompleto || 'este chofer'} ` +
+              `con el tractor ${patenteTractor}. Verificá que hayas seleccionado tu tractor al ingresar.`
+            )
+            setLoading(false)
+            return
           }
         }
       } catch (err) {
+        sqlDisponible = false
         console.log('⚠️ SQL Server no disponible, se intentará con la API externa')
       }
-      
+
+      if (!sqlDisponible) {
+        console.log('↩️ Fallback: buscando en el historial de la API externa')
+      }
+
       // PASO 2: Fallback → Obtener hojas de ruta de la API externa
       setModoDeteccion('historial')
       const nombreChofer = (chofer as any)?.nombreCompleto || ''

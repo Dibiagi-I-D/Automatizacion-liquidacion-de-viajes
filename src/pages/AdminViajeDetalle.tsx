@@ -1048,7 +1048,7 @@ function Celda({
           <button
             onClick={abrir}
             title={`Editar ${campo}`}
-            className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-600 hover:text-blue-400 transition-all flex-shrink-0"
+            className="text-gray-600 hover:text-blue-400 opacity-60 hover:opacity-100 transition-all flex-shrink-0"
           >
             <FaPen className="text-[9px]" />
           </button>
