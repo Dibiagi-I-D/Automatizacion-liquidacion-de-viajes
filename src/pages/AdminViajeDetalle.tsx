@@ -4,7 +4,7 @@ import {
   FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck,
   FaArrowLeft, FaClipboardCheck, FaExclamationTriangle,
   FaFileExport, FaTrailer, FaHashtag, FaBuilding, FaDownload,
-  FaTimes, FaPen, FaSave
+  FaTimes, FaPen, FaSave, FaCopy
 } from 'react-icons/fa'
 
 import { totalesPorMoneda } from '../types'
@@ -67,33 +67,83 @@ interface Aprobacion {
   totalImporte: number
 }
 
+/**
+ * Registro CORMVI — el orden de las claves define el orden de las columnas
+ * en el CSV, en el copiado y en la tabla del panel. Es el orden que espera Softland.
+ */
 interface CormviRecord {
-  CORMVI_NROCTA: string        // PROVEEDOR
-  CORMVI_TIPORI: string        // TIPO DE PRODUCTO ORIGINAL
-  CORMVI_ARTORI: string        // CODIGO PRODUCTO ORIGINAL
-  CORMVI_TIPCPT: string        // TIPO DE CONCEPTO — siempre 'A'
-  CORMVI_CODCPT: string        // CONCEPTO — siempre 'S000'
-  CORMVI_COFLIS: string        // COEFICIENTE — siempre 'ARS'
-  USR_CORMVI_NLIIVA: string    // INFORMAL: 'S' / 'N'
-  USR_CORMVI_CANTID: number    // CANTIDAD
-  USR_CORMVI_PRECIO: number    // PRECIO
-  VIRT_TOTLIN: number          // (virtual) CANTIDAD × PRECIO
-  USR_CORMVI_PERLIQ: string    // PERIODO A LIQUIDAR
-  USR_CORMVI_EMPLEG: string    // EMPRESA LEGAJO
-  USR_CORMVI_NROLEG: string    // LEGAJO
-  USR_CORMVI_NROVIA: number    // HOJA DE VIAJE N
-  USR_CORMVI_NROFOR: string    // RENDICION
-  USR_CORMVI_PATTRA: string    // TRACTOR
-  USR_CORMVI_FCHCAL: string | null  // FECHA SALIDA
-  USR_CORMVI_COSAVI: number | null  // COEF. VIAJE SEGUN FECHA SALIDA
-  USR_CORMVI_VAITSE: number    // VALOR DE ITEM SELECCIONADO
-  USR_CORMVI_NOMLEG: string    // NOMBRE EMPLEADO
-  USR_CORMVI_CAJCAM: number | null  // VALOR DE LA CAJA CAMION
-  CORMVI_PRECIO: number        // PRECIO (estándar Softland)
-  CORMVI_CANTID: number        // CANTIDAD CORMVI (-1 / 1)
+  CORMVI_NROCTA: string        // Proveedor
+  CORMVI_TIPORI: string        // Tipo del producto original
+  CORMVI_ARTORI: string        // Código de producto original
+  CORMVI_TIPCPT: string        // Tipo de concepto — siempre 'A'
+  CORMVI_CODCPT: string        // Concepto — siempre 'S000'
+  CORMVI_COFLIS: string        // Coeficiente — siempre 'ARS'
+  USR_CORMVI_NLIIVA: string    // Informal: 'S' / 'N'
+  USR_CORMVI_CANTID: number    // Cantidad
+  USR_CORMVI_PRECIO: number    // Precio
+  VIRT_TOTLIN: number          // Total (virtual) = cantidad × precio
+  USR_CORMVI_PERLIQ: string    // Período a liquidar (YYYYMM)
+  CORMVI_TEXTOS: string        // Observaciones
+  USR_CORMVI_EMPLEG: string    // Empresa Legajo
+  USR_CORMVI_NROLEG: string    // Legajo
+  USR_CORMVI_NROVIA: number    // Hoja de Viaje N°
+  USR_CORMVI_NROFOR: string    // Rendición
+  USR_CORMVI_PATTRA: string    // Tractor
+  USR_CORMVI_DELETE: string    // Línea a borrar — siempre 'N'
+  USR_CORMVI_FCHCAL: string | null  // Fecha Salida
+  USR_CORMVI_COSAVI: number | null  // Coeficiente de viaje según fecha de salida
+  USR_CORMVI_VAITSE: number    // Valor de item seleccionado
+  USR_CORMVI_NOMLEG: string    // Nombre Empleado
+  USR_CORMVI_CAJCAM: number | null  // Valor de la Caja Camión
+  CORMVI_PRECIO: number        // Precio (estándar Softland)
+  CORMVI_CANTID: number        // Cantidad (-1 débito / 1 crédito)
+  USR_CORMVI_PERIOD: number    // Período (numérico, YYYYMM)
+  USR_CORMVI_FCHLLE: string | null  // Fecha de llegada
 }
 
-function gastoToCormvi(gasto: GastoAPI): CormviRecord {
+/**
+ * Etiquetas de cada columna, en el orden exacto de CormviRecord.
+ * Única fuente de verdad para la cabecera de la tabla, el copiado de filas
+ * y la exportación: agregar una columna acá la propaga a los tres lugares.
+ */
+const COLUMNAS_CORMVI: Array<{ campo: keyof CormviRecord; etiqueta: string; num?: boolean }> = [
+  { campo: 'CORMVI_NROCTA',     etiqueta: 'Proveedor' },
+  { campo: 'CORMVI_TIPORI',     etiqueta: 'Tipo del producto original' },
+  { campo: 'CORMVI_ARTORI',     etiqueta: 'Código de producto original' },
+  { campo: 'CORMVI_TIPCPT',     etiqueta: 'Tipo de concepto' },
+  { campo: 'CORMVI_CODCPT',     etiqueta: 'Concepto' },
+  { campo: 'CORMVI_COFLIS',     etiqueta: 'Coeficiente' },
+  { campo: 'USR_CORMVI_NLIIVA', etiqueta: 'Informal' },
+  { campo: 'USR_CORMVI_CANTID', etiqueta: 'Cantidad',  num: true },
+  { campo: 'USR_CORMVI_PRECIO', etiqueta: 'Precio',    num: true },
+  { campo: 'VIRT_TOTLIN',       etiqueta: 'Total',     num: true },
+  { campo: 'USR_CORMVI_PERLIQ', etiqueta: 'Período a liquidar' },
+  { campo: 'CORMVI_TEXTOS',     etiqueta: 'Observaciones' },
+  { campo: 'USR_CORMVI_EMPLEG', etiqueta: 'Empresa Legajo' },
+  { campo: 'USR_CORMVI_NROLEG', etiqueta: 'Legajo' },
+  { campo: 'USR_CORMVI_NROVIA', etiqueta: 'Hoja de Viaje N°' },
+  { campo: 'USR_CORMVI_NROFOR', etiqueta: 'Rendición' },
+  { campo: 'USR_CORMVI_PATTRA', etiqueta: 'Tractor' },
+  { campo: 'USR_CORMVI_DELETE', etiqueta: 'Línea a borrar' },
+  { campo: 'USR_CORMVI_FCHCAL', etiqueta: 'Fecha Salida' },
+  { campo: 'USR_CORMVI_COSAVI', etiqueta: 'Coeficiente de viaje según fecha de salida', num: true },
+  { campo: 'USR_CORMVI_VAITSE', etiqueta: 'Valor de item seleccionado', num: true },
+  { campo: 'USR_CORMVI_NOMLEG', etiqueta: 'Nombre Empleado' },
+  { campo: 'USR_CORMVI_CAJCAM', etiqueta: 'Valor de la Caja Camión', num: true },
+  { campo: 'CORMVI_PRECIO',     etiqueta: 'Precio',   num: true },
+  { campo: 'CORMVI_CANTID',     etiqueta: 'Cantidad', num: true },
+  { campo: 'USR_CORMVI_PERIOD', etiqueta: 'Período',  num: true },
+  { campo: 'USR_CORMVI_FCHLLE', etiqueta: 'Fecha de llegada' },
+]
+
+/** Valor de una celda como texto plano, para copiar y exportar. */
+function valorCormviTexto(reg: CormviRecord, campo: keyof CormviRecord): string {
+  const v = reg[campo]
+  if (v === null || v === undefined) return ''
+  return String(v)
+}
+
+function gastoToCormvi(gasto: GastoAPI, fechaLlegada?: string | null): CormviRecord {
   // Período de liquidación desde el campo de la API o derivado de Fecha_Salida
   const periodoLiq = gasto.Periodo_Liquidacion ||
     (gasto.Fecha_Salida
@@ -112,11 +162,14 @@ function gastoToCormvi(gasto: GastoAPI): CormviRecord {
     USR_CORMVI_PRECIO:     gasto.Precio_Unitario,
     VIRT_TOTLIN:           (gasto.Cantidad ?? 1) * gasto.Precio_Unitario,
     USR_CORMVI_PERLIQ:     periodoLiq,
+    CORMVI_TEXTOS:         gasto.Descripcion_Gasto || '',
     USR_CORMVI_EMPLEG:     gasto.Empresa_Legajo || '',
     USR_CORMVI_NROLEG:     gasto.Legajo || '',
     USR_CORMVI_NROVIA:     Number(gasto.Numero_Viaje) || 0,
     USR_CORMVI_NROFOR:     gasto.Numero_Formulario || '',
     USR_CORMVI_PATTRA:     gasto.Patente_Tractor || '',
+    // En los registros reales de Softland esta columna siempre viene en 'N'
+    USR_CORMVI_DELETE:     'N',
     USR_CORMVI_FCHCAL:     fechaSalida,
     USR_CORMVI_COSAVI:     gasto.Coeficiente_Viaje ?? null,
     USR_CORMVI_VAITSE:     gasto.Valor_Item ?? 0,
@@ -124,6 +177,10 @@ function gastoToCormvi(gasto: GastoAPI): CormviRecord {
     USR_CORMVI_CAJCAM:     gasto.Valor_Caja_Camion ?? null,
     CORMVI_PRECIO:         gasto.Precio_Unitario,
     CORMVI_CANTID:         gasto.Cantidad_CORMVI ?? -1,
+    // Mismo período que PERLIQ pero numérico, como está en la tabla real
+    USR_CORMVI_PERIOD:     Number(periodoLiq) || 0,
+    // Fecha de llegada del viaje: sale de la hoja de ruta, no del gasto
+    USR_CORMVI_FCHLLE:     fechaLlegada ?? null,
   }
 }
 
@@ -138,6 +195,9 @@ export default function AdminViajeDetalle() {
   const [loading, setLoading] = useState(true)
   const [aprobando, setAprobando] = useState(false)
   const [error, setError] = useState('')
+
+  // Marca de "copiado" para el feedback visual del botón (id de fila o 'todas')
+  const [copiado, setCopiado] = useState<string | null>(null)
 
   // Edición de gastos guardados en dibiagi_admin_db
   const [editando, setEditando] = useState<GastoAPI | null>(null)
@@ -157,8 +217,8 @@ export default function AdminViajeDetalle() {
 
   // Generar registros CORMVI directamente desde los gastos (sin necesitar aprobación)
   const registrosCormvi = useMemo<CormviRecord[]>(
-    () => gastos.map(g => gastoToCormvi(g)),
-    [gastos]
+    () => gastos.map(g => gastoToCormvi(g, hoja?.Fecha_Llegada ?? null)),
+    [gastos, hoja]
   )
 
   useEffect(() => { cargarDatos() }, [nroViaje])
@@ -413,13 +473,12 @@ export default function AdminViajeDetalle() {
 
   const descargarCSV = () => {
     if (registrosCormvi.length === 0) return
-    const headers = Object.keys(registrosCormvi[0]) as (keyof CormviRecord)[]
     const rows = [
-      headers.join(';'),
+      COLUMNAS_CORMVI.map(c => c.campo).join(';'),
       ...registrosCormvi.map(r =>
-        headers.map(h => {
-          const v = r[h]
-          return typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : v
+        COLUMNAS_CORMVI.map(c => {
+          const v = r[c.campo]
+          return typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : (v ?? '')
         }).join(';')
       )
     ]
@@ -428,6 +487,25 @@ export default function AdminViajeDetalle() {
     const a = document.createElement('a')
     a.href = url; a.download = `CORMVI_Viaje_${nroViaje}.csv`; a.click()
     URL.revokeObjectURL(url)
+  }
+
+  /**
+   * Copia registros al portapapeles separados por tabulaciones, que es el
+   * formato que Excel interpreta como celdas al pegar.
+   */
+  const copiarFilas = async (regs: CormviRecord[], marca: string, conCabecera = false) => {
+    const lineas = regs.map(r =>
+      COLUMNAS_CORMVI.map(c => valorCormviTexto(r, c.campo)).join('\t')
+    )
+    if (conCabecera) lineas.unshift(COLUMNAS_CORMVI.map(c => c.etiqueta).join('\t'))
+
+    try {
+      await navigator.clipboard.writeText(lineas.join('\n'))
+      setCopiado(marca)
+      setTimeout(() => setCopiado(prev => (prev === marca ? null : prev)), 1500)
+    } catch {
+      alert('No se pudo copiar. Es posible que el navegador bloquee el portapapeles fuera de HTTPS.')
+    }
   }
 
   const descargarJSON = () => {
@@ -633,6 +711,19 @@ export default function AdminViajeDetalle() {
 
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
+                  onClick={() => copiarFilas(registrosCormvi, 'todas', true)}
+                  title="Copiar las 27 columnas de todas las filas, con cabecera"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium border transition-all ${
+                    copiado === 'todas'
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      : 'bg-white/[0.05] hover:bg-white/[0.09] text-gray-300 hover:text-white border-white/[0.08]'
+                  }`}
+                >
+                  {copiado === 'todas'
+                    ? <><FaCheck className="text-[10px]" /> Copiado</>
+                    : <><FaCopy className="text-[10px]" /> Copiar tabla</>}
+                </button>
+                <button
                   onClick={descargarCSV}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/[0.05] hover:bg-white/[0.09] text-gray-300 hover:text-white border border-white/[0.08] transition-all"
                 >
@@ -662,12 +753,15 @@ export default function AdminViajeDetalle() {
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[90px]">Informal</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[90px]">Cantidad</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Precio</th>
+                    <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Total</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[150px]">Período a Liquidar</th>
+                    <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[160px]">Observaciones</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[130px]">Empresa Legajo</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[90px]">Legajo</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[130px]">Hoja de Viaje N°</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[110px]">Rendición</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[100px]">Tractor</th>
+                    <th className="text-center py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Línea a Borrar</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Fecha Salida</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[240px]">Coef. Viaje según Fecha Salida</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[160px]">Valor Ítem Seleccionado</th>
@@ -675,6 +769,9 @@ export default function AdminViajeDetalle() {
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[160px]">Valor Caja Camión</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[110px]">Precio</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[100px]">Cantidad</th>
+                    <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[110px]">Período</th>
+                    <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[140px]">Fecha de Llegada</th>
+                    <th className="text-center py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[80px]">Copiar</th>
                     <th className="text-center py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[80px]">Editar</th>
                   </tr>
                 </thead>
@@ -745,8 +842,15 @@ export default function AdminViajeDetalle() {
                         <Celda {...celda('importe')}  valor={reg.USR_CORMVI_PRECIO}  tipo="number" alinear="right"
                                className="text-white font-bold" render={(v) => formatImporte(Number(v))} />
 
+                        {/* Columna virtual: cantidad × precio, no se edita */}
+                        <td className="py-3.5 px-4 text-right text-gray-400 tabular-nums" title="Cantidad × Precio">
+                          {formatImporte(reg.VIRT_TOTLIN)}
+                        </td>
+
                         {/* Derivado de la fecha — se cambia editando Fecha Salida */}
                         <td className="py-3.5 px-4 text-gray-300" title="Se deriva de la Fecha Salida">{reg.USR_CORMVI_PERLIQ}</td>
+
+                        <Celda {...celda('descripcion')} valor={reg.CORMVI_TEXTOS} className="text-gray-400" />
 
                         <Celda {...celda('empresaChofer')}  valor={reg.USR_CORMVI_EMPLEG} className="text-gray-300" />
                         <Celda {...celda('legajoChofer')}   valor={reg.USR_CORMVI_NROLEG} className="text-gray-200 font-semibold" />
@@ -754,6 +858,12 @@ export default function AdminViajeDetalle() {
                         <Celda {...celda('rendicion')}      valor={reg.USR_CORMVI_NROFOR} className="text-gray-400"
                                render={(v) => String(v).slice(-8)} />
                         <Celda {...celda('patenteTractor')} valor={reg.USR_CORMVI_PATTRA} className="text-gray-200 font-semibold" />
+
+                        {/* Constante 'N' — así vienen todas las filas reales de CORMVI */}
+                        <td className="py-3.5 px-4 text-center text-gray-500" title="Línea a borrar — siempre N">
+                          {reg.USR_CORMVI_DELETE}
+                        </td>
+
                         <Celda
                           {...celda('fecha')}
                           valor={reg.USR_CORMVI_FCHCAL}
@@ -769,6 +879,31 @@ export default function AdminViajeDetalle() {
                         <Celda {...celda('importe')}               valor={reg.CORMVI_PRECIO} tipo="number" alinear="right"
                                className="text-gray-300" render={(v) => formatImporte(Number(v))} />
                         <Celda {...celda('cantidadCormvi')}        valor={reg.CORMVI_CANTID} tipo="number" alinear="right" className="text-gray-300" />
+
+                        {/* Derivados: período numérico y fecha de llegada de la hoja de ruta */}
+                        <td className="py-3.5 px-4 text-right text-gray-300 tabular-nums" title="Mismo período que 'Período a liquidar', en numérico">
+                          {reg.USR_CORMVI_PERIOD || ''}
+                        </td>
+                        <td className="py-3.5 px-4 text-gray-300" title="Fecha de llegada de la hoja de ruta">
+                          {reg.USR_CORMVI_FCHLLE ? String(reg.USR_CORMVI_FCHLLE).split('T')[0].split(' ')[0] : ''}
+                        </td>
+
+                        {/* Copiar la fila completa en el orden de columnas de Softland */}
+                        <td className="py-3.5 px-4 text-center">
+                          <button
+                            onClick={() => copiarFilas([reg], `fila-${i}`)}
+                            title="Copiar esta fila (se pega en Excel como celdas)"
+                            className={`w-7 h-7 rounded-md border transition-all inline-flex items-center justify-center ${
+                              copiado === `fila-${i}`
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                : 'bg-white/[0.05] hover:bg-purple-500/20 text-gray-400 hover:text-purple-300 border-white/[0.08]'
+                            }`}
+                          >
+                            {copiado === `fila-${i}`
+                              ? <FaCheck className="text-[10px]" />
+                              : <FaCopy className="text-[10px]" />}
+                          </button>
+                        </td>
 
                         <td className="py-3.5 px-4 text-center">
                           {id ? (
@@ -792,13 +927,14 @@ export default function AdminViajeDetalle() {
                       key={t.pais}
                       className={`bg-white/[0.03] ${i === 0 ? 'border-t-2 border-white/[0.08]' : ''}`}
                     >
+                      {/* 10 columnas de etiqueta + el importe bajo "Precio" + las 20 restantes = 31 */}
                       <td colSpan={10} className="py-3 px-4 text-right font-bold text-gray-400 text-xs uppercase tracking-wider">
                         Total {t.moneda}  <span className="text-gray-600 normal-case">{t.cantidad} reg.</span>
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-white text-base tabular-nums">
                         {formatImporte(t.total)}
                       </td>
-                      <td colSpan={14} />
+                      <td colSpan={20} />
                     </tr>
                   ))}
                 </tbody>
