@@ -7,6 +7,9 @@ import {
   FaTimes, FaPen, FaSave
 } from 'react-icons/fa'
 
+import { totalesPorMoneda } from '../types'
+import TotalesPorMoneda from '../components/TotalesPorMoneda'
+
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 interface HojaDeRuta {
@@ -50,6 +53,10 @@ interface GastoAPI {
   // ── Sólo para gastos guardados en dibiagi_admin_db ────────────
   _localId?:          string         // id en dbo.gastos_viaje → habilita la edición
   _tieneFoto?:        boolean        // hay imagen del ticket adjunta
+  // País del gasto: define la moneda del importe (ARS / CLP / UYU).
+  // Los gastos que vienen de la API de portería no lo declaran, así que
+  // normalizarPais() los toma como ARG.
+  Pais?:              string
   [key: string]:      any            // otros campos técnicos adicionales
 }
 
@@ -184,6 +191,7 @@ export default function AdminViajeDetalle() {
       Valor_Item:          g.valorItemSeleccionado ?? g.importe ?? 0,
       Valor_Caja_Camion:   g.valorCajaCamion ?? null,
       Cantidad_CORMVI:     g.cantidadCormvi ?? -1,
+      Pais:                g.pais || 'ARG',
       _localId:            g.id,
       _tieneFoto:          !!g.tieneFoto,
     }
@@ -244,6 +252,11 @@ export default function AdminViajeDetalle() {
     }
   }
 
+  // Un total por moneda. `totalImporte` (suma cruda) se mantiene solo porque el
+  // backend lo persiste en dbo.aprobaciones_viaje.total_importe; NO se muestra.
+  const totalesGastos = totalesPorMoneda(
+    gastos.map(g => ({ pais: g.Pais, importe: g.Precio_Unitario ?? 0 }))
+  )
   const totalImporte = gastos.reduce((sum, g) => sum + (g.Precio_Unitario ?? 0), 0)
 
   const formatFecha = (fecha: string | null) => {
@@ -255,7 +268,8 @@ export default function AdminViajeDetalle() {
     new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
 
   const aprobarRendicion = async () => {
-    if (!confirm(`Aprobar la rendicion del Viaje ${nroViaje}?\n\nTotal: $ ${formatImporte(totalImporte)}`)) return
+    const detalle = totalesGastos.map(t => `  ${t.moneda}: $ ${formatImporte(t.total)} (${t.cantidad} gastos)`).join('\n')
+    if (!confirm(`Aprobar la rendicion del Viaje ${nroViaje}?\n\nTotales por moneda:\n${detalle}`)) return
     setAprobando(true)
     try {
       const res = await fetch(`${API_URL}/gastos-viaje/aprobaciones/${nroViaje}`, {
@@ -569,10 +583,10 @@ export default function AdminViajeDetalle() {
                 <p className="text-sm text-white font-mono font-medium">{nroViaje}</p>
               </div>
               <div>
-                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Gastos</p>
-                <p className="text-sm text-white font-medium">
-                  {gastos.length} registros  <span className="text-emerald-400">$ {formatImporte(totalImporte)}</span>
+                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1">
+                  Gastos  {gastos.length} registros
                 </p>
+                <TotalesPorMoneda totales={totalesGastos} />
               </div>
             </div>
           </div>
@@ -605,7 +619,12 @@ export default function AdminViajeDetalle() {
                   Registros CORMVI  Viaje {nroViaje}
                 </h3>
                 <p className="text-[10px] text-gray-600 mt-0.5">
-                  {registrosCormvi.length} registros  $ {formatImporte(totalImporte)}
+                  {registrosCormvi.length} registros
+                  {totalesGastos.map(t => (
+                    <span key={t.pais} className="ml-2">
+                      {t.moneda} $ {formatImporte(t.total)}
+                    </span>
+                  ))}
                   {!estaAprobado && (
                     <span className="ml-2 text-amber-500"> Pendiente de aprobacion</span>
                   )}
@@ -767,13 +786,21 @@ export default function AdminViajeDetalle() {
                       </tr>
                     )
                   })}
-                  <tr className="border-t-2 border-white/[0.08] bg-white/[0.03]">
-                    <td colSpan={10} className="py-4 px-4 text-right font-bold text-gray-400 text-xs uppercase tracking-wider">TOTAL</td>
-                    <td className="py-4 px-4 text-right font-bold text-white text-base">
-                      {formatImporte(totalImporte)}
-                    </td>
-                    <td colSpan={14} />
-                  </tr>
+                  {/* Una fila de total por moneda: los importes no son sumables entre sí */}
+                  {totalesGastos.map((t, i) => (
+                    <tr
+                      key={t.pais}
+                      className={`bg-white/[0.03] ${i === 0 ? 'border-t-2 border-white/[0.08]' : ''}`}
+                    >
+                      <td colSpan={10} className="py-3 px-4 text-right font-bold text-gray-400 text-xs uppercase tracking-wider">
+                        Total {t.moneda}  <span className="text-gray-600 normal-case">{t.cantidad} reg.</span>
+                      </td>
+                      <td className="py-3 px-4 text-right font-bold text-white text-base tabular-nums">
+                        {formatImporte(t.total)}
+                      </td>
+                      <td colSpan={14} />
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

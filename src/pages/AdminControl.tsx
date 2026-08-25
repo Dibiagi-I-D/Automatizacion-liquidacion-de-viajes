@@ -7,6 +7,9 @@ import {
   FaSignOutAlt, FaChevronRight
 } from 'react-icons/fa'
 
+import { totalesPorMoneda } from '../types'
+import TotalesPorMoneda from '../components/TotalesPorMoneda'
+
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 interface HojaDeRuta {
@@ -119,15 +122,22 @@ export default function AdminControl() {
   const formatImporte = (importe: number) =>
     new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(importe)
 
-  const totalViaje = (nroViaje: number) =>
-    (gastosPorViaje[nroViaje] || []).reduce((sum, g) => sum + g.importe, 0)
+  /** Totales de un viaje, separados por moneda */
+  const totalesViaje = (nroViaje: number) =>
+    totalesPorMoneda(gastosPorViaje[nroViaje] || [])
 
   const totalPendientes = hojasConGastos.filter(h => !aprobaciones[h.Nro_Viaje]).length
   const totalAprobados  = hojasConGastos.filter(h =>  aprobaciones[h.Nro_Viaje]).length
-  const importeTotal    = hojasConGastos.reduce((sum, h) => sum + totalViaje(h.Nro_Viaje), 0)
-  const importeAprobado = hojasConGastos
-    .filter(h => aprobaciones[h.Nro_Viaje])
-    .reduce((sum, h) => sum + totalViaje(h.Nro_Viaje), 0)
+
+  // Los importes se agregan por moneda, nunca en un único número:
+  // sumar ARS con CLP daría una cifra sin significado contable.
+  const gastosDeHojas = (soloAprobados: boolean) =>
+    hojasConGastos
+      .filter(h => !soloAprobados || aprobaciones[h.Nro_Viaje])
+      .flatMap(h => gastosPorViaje[h.Nro_Viaje] || [])
+
+  const totalesGenerales = totalesPorMoneda(gastosDeHojas(false))
+  const totalesAprobados = totalesPorMoneda(gastosDeHojas(true))
 
   if (loading) {
     return (
@@ -178,7 +188,7 @@ export default function AdminControl() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-3 gap-3 mb-4">
           <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
             <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Rendiciones</p>
             <p className="text-2xl font-bold text-white">{hojasConGastos.length}</p>
@@ -192,12 +202,24 @@ export default function AdminControl() {
           <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
             <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Aprobadas</p>
             <p className="text-2xl font-bold text-emerald-400">{totalAprobados}</p>
-            <p className="text-[10px] text-gray-600 mt-0.5">$ {formatImporte(importeAprobado)}</p>
+            <p className="text-[10px] text-gray-600 mt-0.5">de {hojasConGastos.length}</p>
+          </div>
+        </div>
+
+        {/* Importes: una columna por moneda. No hay un total unificado porque
+            ARS, CLP y UYU no son sumables entre sí. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2.5">
+              Importe total por moneda
+            </p>
+            <TotalesPorMoneda totales={totalesGenerales} size="lg" vacio="Sin gastos cargados" />
           </div>
           <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Importe Total</p>
-            <p className="text-2xl font-bold text-white">$ {formatImporte(importeTotal)}</p>
-            <p className="text-[10px] text-gray-600 mt-0.5">Todas las rendiciones</p>
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2.5">
+              Aprobado por moneda
+            </p>
+            <TotalesPorMoneda totales={totalesAprobados} size="lg" vacio="Nada aprobado aun" />
           </div>
         </div>
 
@@ -251,7 +273,7 @@ export default function AdminControl() {
           <div className="space-y-2">
             {hojasFiltradas.map((hoja) => {
               const cantGastos   = gastosPorViaje[hoja.Nro_Viaje]?.length || 0
-              const total        = totalViaje(hoja.Nro_Viaje)
+              const totales      = totalesViaje(hoja.Nro_Viaje)
               const estaAprobado = !!aprobaciones[hoja.Nro_Viaje]
               return (
                 <button
@@ -294,9 +316,9 @@ export default function AdminControl() {
                         </span>
                       </div>
                     </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-base font-bold text-white">$ {formatImporte(total)}</p>
-                      <p className="text-[10px] text-gray-500">{cantGastos} gasto{cantGastos !== 1 ? 's' : ''}</p>
+                    <div className="text-right flex-shrink-0 min-w-[135px]">
+                      <TotalesPorMoneda totales={totales} />
+                      <p className="text-[10px] text-gray-500 mt-1">{cantGastos} gasto{cantGastos !== 1 ? 's' : ''}</p>
                     </div>
                     <FaChevronRight className="text-gray-600 group-hover:text-gray-400 text-xs flex-shrink-0 transition-colors" />
                   </div>

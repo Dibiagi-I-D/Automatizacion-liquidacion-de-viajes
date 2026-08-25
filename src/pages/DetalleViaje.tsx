@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { FaTruck, FaSpinner, FaCalendarAlt, FaCheckCircle, FaClock, FaArrowLeft, FaTrash, FaPlus, FaUser, FaTrailer } from 'react-icons/fa'
-import { BANDERAS, Pais } from '../types'
+import { BANDERAS, Pais, totalesPorMoneda } from '../types'
+import TotalesPorMoneda from '../components/TotalesPorMoneda'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
@@ -103,7 +104,8 @@ export default function DetalleViaje() {
     return new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(importe)
   }
 
-  const totalGastos = gastos.reduce((sum, g) => sum + g.importe, 0)
+  // Un total por moneda: ARS, CLP y UYU no se suman entre sí
+  const totalesViaje = totalesPorMoneda(gastos)
 
   if (loading) {
     return (
@@ -158,10 +160,10 @@ export default function DetalleViaje() {
           </div>
           
           {gastos.length > 0 && (
-            <div className="text-right">
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider">Total</p>
-              <p className="text-xl font-bold text-white">$ {formatImporte(totalGastos)}</p>
-              <p className="text-[10px] text-gray-500 mt-0.5">{gastos.length} gasto{gastos.length !== 1 ? 's' : ''}</p>
+            <div className="text-right min-w-[140px]">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Total por moneda</p>
+              <TotalesPorMoneda totales={totalesViaje} />
+              <p className="text-[10px] text-gray-500 mt-1">{gastos.length} gasto{gastos.length !== 1 ? 's' : ''}</p>
             </div>
           )}
         </div>

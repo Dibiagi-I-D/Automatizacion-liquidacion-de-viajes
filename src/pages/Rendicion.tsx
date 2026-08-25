@@ -1,8 +1,9 @@
 ﻿import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { FaTruck, FaSpinner, FaCalendarAlt, FaCheckCircle, FaClock, FaEye, FaChevronRight } from 'react-icons/fa'
-import { BANDERAS, Pais } from '../types'
+import { FaTruck, FaSpinner, FaCalendarAlt, FaEye, FaChevronRight } from 'react-icons/fa'
+import { Pais, totalesPorMoneda } from '../types'
+import TotalesPorMoneda from '../components/TotalesPorMoneda'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
@@ -39,7 +40,6 @@ export default function Rendicion() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [gastosCount, setGastosCount] = useState<Record<number, number>>({})
-  const [totalesPorViaje, setTotalesPorViaje] = useState<Record<number, number>>({})
 
   useEffect(() => {
     cargarHojasDeRuta()
@@ -53,21 +53,20 @@ export default function Rendicion() {
         if (data.success) {
           const gastosData: Gasto[] = data.data
           setGastos(gastosData)
-          
+
           const counts: Record<number, number> = {}
-          const totales: Record<number, number> = {}
-          
           gastosData.forEach((gasto) => {
             counts[gasto.nroViaje] = (counts[gasto.nroViaje] || 0) + 1
-            totales[gasto.nroViaje] = (totales[gasto.nroViaje] || 0) + gasto.importe
           })
-          
           setGastosCount(counts)
-          setTotalesPorViaje(totales)
         }
       })
       .catch(() => {})
   }
+
+  /** Totales separados por moneda para un viaje puntual */
+  const totalesDelViaje = (nroViaje: number) =>
+    totalesPorMoneda(gastos.filter(g => g.nroViaje === nroViaje))
 
   const cargarHojasDeRuta = async () => {
     try {
@@ -125,9 +124,6 @@ export default function Rendicion() {
     return new Date(fecha).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' })
   }
 
-  const formatImporte = (importe: number) => {
-    return new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(importe)
-  }
 
   const verDetalleViaje = (nroViaje: number) => {
     navigate(`/dashboard/detalle-viaje?viaje=${nroViaje}`)
@@ -156,7 +152,8 @@ export default function Rendicion() {
     )
   }
 
-  const totalGeneral = Object.values(totalesPorViaje).reduce((sum, total) => sum + total, 0)
+  // Un total por moneda: los importes de distintos países no son sumables
+  const totalesGenerales = totalesPorMoneda(gastos)
   const totalGastos = gastos.length
 
   return (
@@ -170,15 +167,15 @@ export default function Rendicion() {
         </span>
       </div>
 
-      {/* Resumen */}
+      {/* Resumen: un total por moneda, nunca uno unificado */}
       {totalGastos > 0 && (
         <div className="info-panel mb-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs text-gray-500">Total general</p>
-              <p className="text-xl font-bold text-white mt-0.5">$ {formatImporte(totalGeneral)}</p>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-gray-500 mb-2">Totales por moneda</p>
+              <TotalesPorMoneda totales={totalesGenerales} size="lg" />
             </div>
-            <div className="text-right">
+            <div className="text-right flex-shrink-0">
               <p className="text-xs text-gray-500">{totalGastos} gastos registrados</p>
               <p className="text-xs text-gray-600 mt-0.5">
                 {(chofer as any)?.nombreCompleto || ''} · {chofer?.interno || ''}
@@ -199,7 +196,7 @@ export default function Rendicion() {
       ) : (
         <div className="space-y-3">
           {hojasDeRuta.map((hoja) => {
-            const totalViaje = totalesPorViaje[hoja.Nro_Viaje] || 0
+            const totalesViaje = totalesDelViaje(hoja.Nro_Viaje)
             const cantidadGastos = gastosCount[hoja.Nro_Viaje] || 0
 
             return (
@@ -215,11 +212,11 @@ export default function Rendicion() {
                     <p className="text-xs text-gray-500">{hoja.Cod_Empresa}</p>
                   </div>
                   
-                  <div className="text-right">
+                  <div className="text-right min-w-[130px]">
                     {cantidadGastos > 0 ? (
                       <>
-                        <p className="text-lg font-bold text-white">$ {formatImporte(totalViaje)}</p>
-                        <p className="text-[10px] text-gray-500 mt-0.5">{cantidadGastos} gasto{cantidadGastos !== 1 ? 's' : ''}</p>
+                        <TotalesPorMoneda totales={totalesViaje} />
+                        <p className="text-[10px] text-gray-500 mt-1">{cantidadGastos} gasto{cantidadGastos !== 1 ? 's' : ''}</p>
                       </>
                     ) : (
                       <span className="text-[10px] font-medium text-gray-600 bg-white/[0.03] px-2 py-0.5 rounded-md">Sin gastos</span>

@@ -234,9 +234,15 @@ export default function NuevoGasto() {
     }
 
     try {
-      // Obtener la descripción del concepto seleccionado
+      // Estos campos ya no se muestran en el formulario: normalmente los completa el
+      // OCR. Si el gasto se carga a mano (sin foto), quedan vacíos, así que acá se
+      // aplica el mismo fallback que usa el backend: TARIFA/14 — Gastos extras.
+      const tipoProductoFinal   = tipoProducto   || 'TARIFA'
+      const codigoArticuloFinal = codigoArticulo || '14'
+
+      // Obtener la descripción del concepto para guardarla como texto legible
       const conceptoSeleccionado = conceptos.find(
-        c => c.tipoProducto === tipoProducto && c.codigoArticulo === codigoArticulo
+        c => c.tipoProducto === tipoProductoFinal && c.codigoArticulo === codigoArticuloFinal
       )
 
       // Adjuntar la foto del ticket (comprimida) para que quede como respaldo
@@ -258,9 +264,9 @@ export default function NuevoGasto() {
           nroViaje: parseInt(nroViaje),
           fecha: new Date(fecha).toISOString(),
           pais,
-          tipo: conceptoSeleccionado?.descripcion || tipoProducto || 'Sin clasificar',
-          tipoProducto,
-          codigoArticulo,
+          tipo: conceptoSeleccionado?.descripcion || tipoProductoFinal,
+          tipoProducto:   tipoProductoFinal,
+          codigoArticulo: codigoArticuloFinal,
           formalidad,
           codigoProveedor: codigoProveedor.trim() || undefined,
           importe: importeNum,
@@ -535,108 +541,12 @@ export default function NuevoGasto() {
           </div>
         </div>
 
-        {/* Tipo de Producto (Softland) */}
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
-            Tipo de Gasto
-          </label>
-          {loadingConceptos ? (
-            <div className="input-field flex items-center gap-2 text-gray-500 text-sm">
-              <FaSpinner className="animate-spin text-xs" />
-              Cargando conceptos...
-            </div>
-          ) : (
-            <select
-              className="input-field text-sm appearance-none bg-[#1a1b23] text-white"
-              value={tipoProducto}
-              onChange={(e) => {
-                setTipoProducto(e.target.value)
-                // Auto-seleccionar el primer artículo del tipo elegido
-                const primero = conceptos.find(c => c.tipoProducto === e.target.value)
-                if (primero) setCodigoArticulo(primero.codigoArticulo)
-              }}
-              required
-            >
-              <option value="">Seleccioná un tipo...</option>
-              {[...new Set(conceptos.map(c => c.tipoProducto))].map((tp) => (
-                <option key={tp} value={tp}>
-                  {tp === 'COMBLU' ? 'COMBLU — Combustibles y Lubricantes' :
-                   tp === 'TARIFA' ? 'TARIFA — Tarifas y Peajes' :
-                   tp === 'HONPRO' ? 'HONPRO — Honorarios Profesionales' :
-                   tp === 'NEUMAT' ? 'NEUMAT — Neumáticos' :
-                   tp === 'SERVIC' ? 'SERVIC — Servicios Generales' :
-                   tp}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        {/* Código de Artículo (Softland) */}
-        {tipoProducto && (
-          <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
-              Concepto / Código
-            </label>
-            <select
-              className="input-field text-sm appearance-none bg-[#1a1b23] text-white"
-              value={codigoArticulo}
-              onChange={(e) => setCodigoArticulo(e.target.value)}
-              required
-            >
-              <option value="">Seleccioná un concepto...</option>
-              {conceptos
-                .filter(c => c.tipoProducto === tipoProducto)
-                .map((c) => (
-                  <option key={`${c.tipoProducto}-${c.codigoArticulo}`} value={c.codigoArticulo}>
-                    {c.codigoArticulo} — {c.descripcion} ({c.unidadMedida})
-                  </option>
-                ))}
-            </select>
-          </div>
-        )}
-
-        {/* Formalidad (FORMAL / INFORMAL) */}
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
-            Formalidad
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            {(['FORMAL', 'INFORMAL'] as const).map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setFormalidad(f)}
-                className={`min-h-[52px] px-3 py-2.5 rounded-xl border transition-all active:scale-95 ${
-                  formalidad === f
-                    ? f === 'FORMAL'
-                      ? 'bg-emerald-600/10 border-emerald-500/30 text-emerald-400'
-                      : 'bg-amber-600/10 border-amber-500/30 text-amber-400'
-                    : 'bg-white/[0.02] border-white/[0.06] text-gray-500'
-                }`}
-              >
-                <div className="text-sm font-medium">{f}</div>
-                <div className="text-[10px] mt-0.5 opacity-70">
-                  {f === 'FORMAL' ? 'Con IVA / Factura A-B' : 'Sin IVA / Factura C'}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Proveedor */}
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">
-            Código Proveedor <span className="text-gray-600 normal-case tracking-normal">(opcional)</span>
-          </label>
-          <input
-            type="text"
-            className="input-field text-sm"
-            placeholder="Código numérico del proveedor en Softland (ej: 142, 999999)..."
-            value={codigoProveedor}
-            onChange={(e) => setCodigoProveedor(e.target.value)}
-          />
-        </div>
+        {/*
+          Tipo de gasto, concepto, formalidad y proveedor NO se muestran al chofer:
+          los completa el OCR y viajan igual en el POST. Se ocultaron tras pruebas
+          de usuario — eran campos de nomenclatura Softland que el chofer no puede
+          decidir bien y que solo agregaban fricción. Los estados siguen vivos.
+        */}
 
         {/* Importe */}
         <div>
