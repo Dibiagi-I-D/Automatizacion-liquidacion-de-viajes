@@ -4,7 +4,7 @@ import {
   FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck,
   FaArrowLeft, FaClipboardCheck, FaExclamationTriangle,
   FaFileExport, FaTrailer, FaHashtag, FaBuilding, FaDownload,
-  FaTimes, FaPen, FaSave, FaCopy
+  FaTimes, FaPen, FaSave, FaCopy, FaTrash
 } from 'react-icons/fa'
 
 import { totalesPorMoneda } from '../types'
@@ -198,6 +198,8 @@ export default function AdminViajeDetalle() {
 
   // Marca de "copiado" para el feedback visual del botón (id de fila o 'todas')
   const [copiado, setCopiado] = useState<string | null>(null)
+  // Id del gasto que se está borrando, para deshabilitar el botón mientras tanto
+  const [borrando, setBorrando] = useState<string | null>(null)
 
   // Edición de gastos guardados en dibiagi_admin_db
   const [editando, setEditando] = useState<GastoAPI | null>(null)
@@ -345,6 +347,33 @@ export default function AdminViajeDetalle() {
       console.error('Error al aprobar:', err)
     } finally {
       setAprobando(false)
+    }
+  }
+
+  /**
+   * Elimina un gasto. Es la única pantalla donde se puede: el chofer carga y
+   * consulta, pero el control de la rendición es del área administrativa.
+   */
+  const eliminarGasto = async (g: GastoAPI, reg: CormviRecord) => {
+    const id = g._localId
+    if (!id) return
+
+    const detalle = `${reg.CORMVI_TIPORI}/${reg.CORMVI_ARTORI}  ·  $ ${formatImporte(reg.USR_CORMVI_PRECIO)}`
+    if (!confirm(`Eliminar este gasto del viaje ${nroViaje}?\n\n${detalle}\n\nNo se puede deshacer.`)) return
+
+    setBorrando(id)
+    try {
+      const res = await fetch(`${API_URL}/gastos-viaje/${id}`, { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.success !== false) {
+        setGastos(prev => prev.filter(x => x._localId !== id))
+      } else {
+        alert(data.error || 'No se pudo eliminar el gasto.')
+      }
+    } catch {
+      alert('Error de conexión al eliminar el gasto.')
+    } finally {
+      setBorrando(null)
     }
   }
 
@@ -772,7 +801,7 @@ export default function AdminViajeDetalle() {
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[110px]">Período</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[140px]">Fecha de Llegada</th>
                     <th className="text-center py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[80px]">Copiar</th>
-                    <th className="text-center py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[80px]">Editar</th>
+                    <th className="text-center py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[92px]">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -907,15 +936,28 @@ export default function AdminViajeDetalle() {
 
                         <td className="py-3.5 px-4 text-center">
                           {id ? (
-                            <button
-                              onClick={() => abrirEdicion(g)}
-                              title="Editar todos los campos de este gasto"
-                              className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-blue-500/20 text-gray-400 hover:text-blue-300 border border-white/[0.08] transition-all inline-flex items-center justify-center"
-                            >
-                              <FaPen className="text-[10px]" />
-                            </button>
+                            <div className="inline-flex items-center gap-1.5">
+                              <button
+                                onClick={() => abrirEdicion(g)}
+                                title="Editar todos los campos de este gasto"
+                                className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-blue-500/20 text-gray-400 hover:text-blue-300 border border-white/[0.08] transition-all inline-flex items-center justify-center"
+                              >
+                                <FaPen className="text-[10px]" />
+                              </button>
+                              {/* El borrado vive solo acá: el chofer no elimina gastos */}
+                              <button
+                                onClick={() => eliminarGasto(g, reg)}
+                                disabled={borrando === id}
+                                title="Eliminar este gasto"
+                                className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-red-500/20 text-gray-500 hover:text-red-300 border border-white/[0.08] transition-all inline-flex items-center justify-center disabled:opacity-40"
+                              >
+                                {borrando === id
+                                  ? <FaSpinner className="text-[10px] animate-spin" />
+                                  : <FaTrash className="text-[10px]" />}
+                              </button>
+                            </div>
                           ) : (
-                            <span className="text-gray-700 text-[10px]" title="Gasto de la API externa — no editable acá">API</span>
+                            <span className="text-gray-700 text-[10px]" title="Gasto de la API externa — no se edita ni se borra acá">API</span>
                           )}
                         </td>
                       </tr>
