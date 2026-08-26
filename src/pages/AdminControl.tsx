@@ -119,25 +119,12 @@ export default function AdminControl() {
     return new Date(fecha).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' })
   }
 
-  const formatImporte = (importe: number) =>
-    new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(importe)
-
   /** Totales de un viaje, separados por moneda */
   const totalesViaje = (nroViaje: number) =>
     totalesPorMoneda(gastosPorViaje[nroViaje] || [])
 
   const totalPendientes = hojasConGastos.filter(h => !aprobaciones[h.Nro_Viaje]).length
   const totalAprobados  = hojasConGastos.filter(h =>  aprobaciones[h.Nro_Viaje]).length
-
-  // Los importes se agregan por moneda, nunca en un único número:
-  // sumar ARS con CLP daría una cifra sin significado contable.
-  const gastosDeHojas = (soloAprobados: boolean) =>
-    hojasConGastos
-      .filter(h => !soloAprobados || aprobaciones[h.Nro_Viaje])
-      .flatMap(h => gastosPorViaje[h.Nro_Viaje] || [])
-
-  const totalesGenerales = totalesPorMoneda(gastosDeHojas(false))
-  const totalesAprobados = totalesPorMoneda(gastosDeHojas(true))
 
   if (loading) {
     return (
@@ -188,7 +175,9 @@ export default function AdminControl() {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3 mb-4">
+        {/* Los importes agregados no van acá: cada rendición muestra su propio
+            total por moneda en la tarjeta de abajo, y el detalle está adentro. */}
+        <div className="grid grid-cols-3 gap-3 mb-6">
           <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
             <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Rendiciones</p>
             <p className="text-2xl font-bold text-white">{hojasConGastos.length}</p>
@@ -203,23 +192,6 @@ export default function AdminControl() {
             <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Aprobadas</p>
             <p className="text-2xl font-bold text-emerald-400">{totalAprobados}</p>
             <p className="text-[10px] text-gray-600 mt-0.5">de {hojasConGastos.length}</p>
-          </div>
-        </div>
-
-        {/* Importes: una columna por moneda. No hay un total unificado porque
-            ARS, CLP y UYU no son sumables entre sí. */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2.5">
-              Importe total por moneda
-            </p>
-            <TotalesPorMoneda totales={totalesGenerales} size="lg" vacio="Sin gastos cargados" />
-          </div>
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2.5">
-              Aprobado por moneda
-            </p>
-            <TotalesPorMoneda totales={totalesAprobados} size="lg" vacio="Nada aprobado aun" />
           </div>
         </div>
 
