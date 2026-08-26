@@ -136,11 +136,43 @@ const COLUMNAS_CORMVI: Array<{ campo: keyof CormviRecord; etiqueta: string; num?
   { campo: 'USR_CORMVI_FCHLLE', etiqueta: 'Fecha de llegada' },
 ]
 
-/** Valor de una celda como texto plano, para copiar y exportar. */
+/** Columnas que llevan fecha y hay que formatear como dd/mm/aaaa. */
+const COLUMNAS_FECHA: ReadonlyArray<keyof CormviRecord> = ['USR_CORMVI_FCHCAL', 'USR_CORMVI_FCHLLE']
+
+/**
+ * Un valor de celda como texto plano para pegar en Softland.
+ *
+ * Tres reglas, todas para que la fila no se desfase al pegarla:
+ *
+ *  1. Ni tabulaciones ni saltos de línea. Las columnas se separan con TAB y las
+ *     filas con salto: si un texto trae uno adentro, parte la fila al medio y
+ *     todo lo que sigue cae una columna corrida. Se reemplazan por espacio.
+ *  2. Las fechas salen dd/mm/aaaa, no en ISO. Pegar "2026-08-15T00:00:00.000Z"
+ *     no lo interpreta como fecha ningún sistema.
+ *  3. Los decimales van con coma, que es lo que espera un Excel en español.
+ *     Con punto, "1234.5" se lee como texto o como 12345.
+ *
+ * Un valor vacío devuelve "" y conserva igual su tabulación: la columna queda
+ * en blanco pero las de la derecha no se corren.
+ */
 function valorCormviTexto(reg: CormviRecord, campo: keyof CormviRecord): string {
   const v = reg[campo]
   if (v === null || v === undefined) return ''
-  return String(v)
+
+  if (COLUMNAS_FECHA.includes(campo)) {
+    const d = new Date(String(v))
+    if (!isNaN(d.getTime())) {
+      const dd = String(d.getUTCDate()).padStart(2, '0')
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+      return `${dd}/${mm}/${d.getUTCFullYear()}`
+    }
+  }
+
+  if (typeof v === 'number') {
+    return Number.isInteger(v) ? String(v) : String(v).replace('.', ',')
+  }
+
+  return String(v).replace(/[\t\r\n]+/g, ' ').trim()
 }
 
 function gastoToCormvi(gasto: GastoAPI, fechaLlegada?: string | null): CormviRecord {
@@ -502,12 +534,13 @@ export default function AdminViajeDetalle() {
 
   const descargarCSV = () => {
     if (registrosCormvi.length === 0) return
+    // Mismo texto que el copiado al portapapeles, entrecomillado para CSV.
     const rows = [
       COLUMNAS_CORMVI.map(c => c.campo).join(';'),
       ...registrosCormvi.map(r =>
         COLUMNAS_CORMVI.map(c => {
-          const v = r[c.campo]
-          return typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : (v ?? '')
+          const s = valorCormviTexto(r, c.campo)
+          return s.includes(';') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s
         }).join(';')
       )
     ]
