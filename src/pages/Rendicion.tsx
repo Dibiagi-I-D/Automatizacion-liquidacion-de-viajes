@@ -4,20 +4,9 @@ import { useAuth } from '../context/AuthContext'
 import { FaTruck, FaSpinner, FaCalendarAlt, FaEye, FaChevronRight } from 'react-icons/fa'
 import { Pais, totalesPorMoneda } from '../types'
 import TotalesPorMoneda from '../components/TotalesPorMoneda'
+import { buscarViajeActivo, HojaDeRuta } from '../api/viajeActivo'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
-
-interface HojaDeRuta {
-  Cod_Empresa: string
-  Nro_Viaje: number
-  Fecha_Salida: string
-  Fecha_Llegada: string | null
-  Nombre_Chofer: string
-  Patente_Tractor: string
-  Patente_Semirremolque: string
-  Observaciones: string
-  Estado_Viaje: string
-}
 
 interface Gasto {
   id: string
@@ -95,55 +84,27 @@ export default function Rendicion() {
   const totalesDelViaje = (nroViaje: number) =>
     totalesPorMoneda(gastos.filter(g => g.nroViaje === nroViaje))
 
+  /**
+   * Carga UNA sola hoja de ruta: la que el chofer está usando en este momento.
+   *
+   * Antes se mostraba la más reciente más todas las de ±10 días, y aparecían
+   * viajes ya cerrados que al chofer no le aportan nada. Ahora usa la misma
+   * detección que la pantalla de Viajes (patente + legajo contra USR_GTVIAH).
+   */
   const cargarHojasDeRuta = async () => {
-    try {
-      setLoading(true)
-      setError('')
-      
-      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/drivers/roadmaps-public`)
-      
-      if (response.status === 500) {
-        setError('Error en la API de hojas de ruta.')
-        setLoading(false)
-        return
-      }
-      
-      const data = await response.json()
-      
-      if (data.success) {
-        const nombreChofer = (chofer as any)?.nombreCompleto || ''
-        const patenteTractor = chofer?.interno || ''
-        
-        const hojasFiltradas = data.data.filter((hoja: HojaDeRuta) => {
-          if (!hoja.Nombre_Chofer || !hoja.Patente_Tractor) return false
-          
-          const nombreMatch = hoja.Nombre_Chofer.trim().toUpperCase() === nombreChofer.trim().toUpperCase()
-          const patenteMatch = hoja.Patente_Tractor.trim().toUpperCase().replace(/\s+/g, '') === patenteTractor.trim().toUpperCase().replace(/\s+/g, '')
-          
-          return nombreMatch && patenteMatch
-        })
-        
-        const hojasOrdenadas = hojasFiltradas.sort((a: HojaDeRuta, b: HojaDeRuta) => b.Nro_Viaje - a.Nro_Viaje)
-        
-        let hojasRecientes: HojaDeRuta[] = []
-        
-        if (hojasOrdenadas.length > 0) {
-          hojasRecientes.push(hojasOrdenadas[0])
-          const fechaReciente = new Date(hojasOrdenadas[0].Fecha_Salida)
-          
-          for (let i = 1; i < hojasOrdenadas.length; i++) {
-            const diferenciaDias = Math.abs((fechaReciente.getTime() - new Date(hojasOrdenadas[i].Fecha_Salida).getTime()) / (1000 * 60 * 60 * 24))
-            if (diferenciaDias <= 10) hojasRecientes.push(hojasOrdenadas[i])
-          }
-        }
-        
-        setHojasDeRuta(hojasRecientes)
-      }
-    } catch (err) {
-      setError('Error de conexión')
-    } finally {
-      setLoading(false)
+    setLoading(true)
+    setError('')
+
+    const resultado = await buscarViajeActivo(chofer as any)
+
+    if (resultado.estado === 'encontrado') {
+      setHojasDeRuta([resultado.hoja])
+    } else {
+      setHojasDeRuta([])
+      if (resultado.estado === 'error') setError(resultado.mensaje)
     }
+
+    setLoading(false)
   }
 
   const formatFecha = (fecha: string | null) => {
@@ -179,38 +140,21 @@ export default function Rendicion() {
     )
   }
 
-  // Un total por moneda: los importes de distintos países no son sumables
-  const totalesGenerales = totalesPorMoneda(gastos)
-  const totalGastos = gastos.length
-
   return (
     <div className="section-container pb-24">
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-lg font-semibold text-white">
-          Rendiciones
+          Rendición
         </h1>
         <span className="text-xs text-gray-500 font-medium">
-          {hojasDeRuta.length} viaje{hojasDeRuta.length !== 1 ? 's' : ''}
+          {(chofer as any)?.nombreCompleto || ''} · {chofer?.interno || ''}
         </span>
       </div>
 
-      {/* Resumen: un total por moneda, nunca uno unificado */}
-      {totalGastos > 0 && (
-        <div className="info-panel mb-5">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-gray-500 mb-2">Totales por moneda</p>
-              <TotalesPorMoneda totales={totalesGenerales} size="lg" />
-            </div>
-            <div className="text-right flex-shrink-0">
-              <p className="text-xs text-gray-500">{totalGastos} gastos registrados</p>
-              <p className="text-xs text-gray-600 mt-0.5">
-                {(chofer as any)?.nombreCompleto || ''} · {chofer?.interno || ''}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      {/*
+        Sin tarjeta de totales generales: el chofer trabaja sobre una sola hoja
+        de ruta y el detalle completo está en "Ver detalle" de esa hoja.
+      */}
 
       {hojasDeRuta.length === 0 ? (
         <div className="text-center py-16 glass-card p-8">
