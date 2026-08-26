@@ -29,6 +29,7 @@ interface Gasto {
   codigoArticulo: string
   importe: number
   descripcion?: string
+  legajoChofer?: string
   createdAt: string
 }
 
@@ -43,26 +44,52 @@ export default function Rendicion() {
 
   useEffect(() => {
     cargarHojasDeRuta()
-    cargarGastos()
   }, [])
 
-  const cargarGastos = () => {
-    fetch(`${API_URL}/gastos-viaje`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          const gastosData: Gasto[] = data.data
-          setGastos(gastosData)
+  /**
+   * Los gastos se piden UNO POR VIAJE, no con GET /api/gastos-viaje.
+   * Ese endpoint devuelve los gastos de todos los choferes de la empresa, y al
+   * chofer no le sirve —ni le corresponde— ver lo que cargó otro. Pidiendo por
+   * viaje, al navegador solo llega lo de sus propias hojas de ruta.
+   */
+  useEffect(() => {
+    if (hojasDeRuta.length === 0) {
+      setGastos([])
+      setGastosCount({})
+      return
+    }
 
-          const counts: Record<number, number> = {}
-          gastosData.forEach((gasto) => {
-            counts[gasto.nroViaje] = (counts[gasto.nroViaje] || 0) + 1
-          })
-          setGastosCount(counts)
-        }
+    let cancelado = false
+    const legajo = (chofer?.legajo || '').trim()
+
+    Promise.all(
+      hojasDeRuta.map(h =>
+        fetch(`${API_URL}/gastos-viaje/${h.Nro_Viaje}`)
+          .then(r => r.json())
+          .then(d => (d.success ? (d.data as Gasto[]) : []))
+          .catch(() => [] as Gasto[])
+      )
+    ).then(listas => {
+      if (cancelado) return
+
+      // Red de seguridad: si dos choferes compartieron un viaje, mostrar solo
+      // los gastos firmados con este legajo. Los que no lo tengan se conservan.
+      const propios = listas.flat().filter(g => {
+        const suyo = (g.legajoChofer || '').trim()
+        return !legajo || !suyo || suyo === legajo
       })
-      .catch(() => {})
-  }
+
+      setGastos(propios)
+
+      const counts: Record<number, number> = {}
+      propios.forEach(g => {
+        counts[g.nroViaje] = (counts[g.nroViaje] || 0) + 1
+      })
+      setGastosCount(counts)
+    })
+
+    return () => { cancelado = true }
+  }, [hojasDeRuta, chofer])
 
   /** Totales separados por moneda para un viaje puntual */
   const totalesDelViaje = (nroViaje: number) =>

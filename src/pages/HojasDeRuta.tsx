@@ -49,21 +49,41 @@ export default function HojasDeRuta() {
   const [viajeActivo, setViajeActivo] = useState<ViajeActivo | null>(null)
   const [modoDeteccion, setModoDeteccion] = useState<'tiempo-real' | 'historial'>('historial')
 
-  // Cargar conteo de gastos desde el servidor
+  /**
+   * Conteo de gastos por viaje, pidiendo SOLO los viajes que se muestran.
+   * GET /api/gastos-viaje (sin filtro) trae los gastos de todos los choferes de
+   * la empresa; al chofer no le corresponde recibir los de otro.
+   */
   useEffect(() => {
-    fetch(`${API_URL}/gastos-viaje`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          const counts: Record<number, number> = {}
-          data.data.forEach((gasto: any) => {
-            counts[gasto.nroViaje] = (counts[gasto.nroViaje] || 0) + 1
-          })
-          setGastosCount(counts)
-        }
+    if (hojasDeRuta.length === 0) {
+      setGastosCount({})
+      return
+    }
+
+    let cancelado = false
+    const legajo = (chofer?.legajo || '').trim()
+
+    Promise.all(
+      hojasDeRuta.map(h =>
+        fetch(`${API_URL}/gastos-viaje/${h.Nro_Viaje}`)
+          .then(r => r.json())
+          .then(d => ({ nro: h.Nro_Viaje, gastos: d.success ? (d.data as any[]) : [] }))
+          .catch(() => ({ nro: h.Nro_Viaje, gastos: [] as any[] }))
+      )
+    ).then(resultados => {
+      if (cancelado) return
+      const counts: Record<number, number> = {}
+      resultados.forEach(({ nro, gastos }) => {
+        counts[nro] = gastos.filter(g => {
+          const suyo = String(g.legajoChofer || '').trim()
+          return !legajo || !suyo || suyo === legajo
+        }).length
       })
-      .catch(() => {})
-  }, [hojasDeRuta])
+      setGastosCount(counts)
+    })
+
+    return () => { cancelado = true }
+  }, [hojasDeRuta, chofer])
 
   useEffect(() => {
     cargarHojasDeRuta()
