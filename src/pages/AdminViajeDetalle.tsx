@@ -50,7 +50,7 @@ interface GastoAPI {
   Coeficiente_Viaje:  number | null  // COEF. VIAJE SEGUN FECHA SALIDA
   Valor_Item:         number         // VALOR DE ITEM SELECCIONADO
   Valor_Caja_Camion:  number | null  // VALOR DE LA CAJA CAMION
-  Cantidad_CORMVI:    number         // CANTIDAD CORMVI: -1 débito / 1 crédito
+  Cantidad_CORMVI:    number         // CANTIDAD CORMVI: 1 en los RRFF reales
   // ── Sólo para gastos guardados en dibiagi_admin_db ────────────
   _localId?:          string         // id en dbo.gastos_viaje → habilita la edición
   _tieneFoto?:        boolean        // hay imagen del ticket adjunta
@@ -97,7 +97,7 @@ interface CormviRecord {
   USR_CORMVI_NOMLEG: string    // Nombre Empleado
   USR_CORMVI_CAJCAM: number | null  // Valor de la Caja Camión
   CORMVI_PRECIO: number        // Precio (estándar Softland)
-  CORMVI_CANTID: number        // Cantidad (-1 débito / 1 crédito)
+  CORMVI_CANTID: number        // Cantidad. En RRFF real siempre 1 (o 0), nunca negativa
   USR_CORMVI_PERIOD: number    // Período (numérico, YYYYMM)
   USR_CORMVI_FCHLLE: string | null  // Fecha de llegada
 }
@@ -246,7 +246,7 @@ function gastoToCormvi(gasto: GastoAPI, fechaLlegada?: string | null): CormviRec
     USR_CORMVI_NOMLEG:     gasto.Nombre_Chofer || '',
     USR_CORMVI_CAJCAM:     gasto.Valor_Caja_Camion ?? null,
     CORMVI_PRECIO:         gasto.Precio_Unitario,
-    CORMVI_CANTID:         gasto.Cantidad_CORMVI ?? -1,
+    CORMVI_CANTID:         gasto.Cantidad_CORMVI ?? 1,
     // Mismo período que PERLIQ pero numérico, como está en la tabla real
     USR_CORMVI_PERIOD:     Number(periodoLiq) || 0,
     // Fecha de llegada del viaje: sale de la hoja de ruta, no del gasto
@@ -322,7 +322,7 @@ export default function AdminViajeDetalle() {
       Coeficiente_Viaje:   g.coeficienteViaje ?? null,
       Valor_Item:          g.valorItemSeleccionado ?? g.importe ?? 0,
       Valor_Caja_Camion:   g.valorCajaCamion ?? null,
-      Cantidad_CORMVI:     g.cantidadCormvi ?? -1,
+      Cantidad_CORMVI:     g.cantidadCormvi ?? 1,
       Pais:                g.pais || 'ARG',
       _localId:            g.id,
       _tieneFoto:          !!g.tieneFoto,
@@ -497,7 +497,7 @@ export default function AdminViajeDetalle() {
       formalidad:            g.Informal === 'S' ? 'INFORMAL' : 'FORMAL',
       cantidad:              String(g.Cantidad ?? 1),
       importe:               String(g.Precio_Unitario ?? 0),
-      cantidadCormvi:        String(g.Cantidad_CORMVI ?? -1),
+      cantidadCormvi:        String(g.Cantidad_CORMVI ?? 1),
       valorItemSeleccionado: String(g.Valor_Item ?? g.Precio_Unitario ?? 0),
       rendicion:             g.Numero_Formulario ?? '',
       legajoChofer:          g.Legajo ?? '',

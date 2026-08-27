@@ -20,7 +20,10 @@ interface Gasto {
   codigoProveedor: string    // PROVEEDOR — código numérico Softland (ej: 999999, 142, 177)
   importe: number            // PRECIO — precio unitario del gasto
   cantidad: number           // CANTIDAD — cantidad del movimiento
-  cantidadCormvi: number     // CANTIDAD final CORMVI: -1.0000 (débito) o 1.0000 (crédito)
+  // CANTIDAD final CORMVI. En los 23.251 movimientos RRFF reales de Softland
+  // este campo vale 1 (23.199 registros) o 0 (52). Ninguno es negativo: el -1
+  // que se usaba antes por defecto pertenece a otros formularios, no a RRFF.
+  cantidadCormvi: number
   coeficienteViaje: number | null  // COEFICIENTE DE VIAJE SEGUN FECHA DE SALIDA
   valorItemSeleccionado: number    // VALOR DE ITEM SELECCIONADO
   valorCajaCamion: number | null   // VALOR DE LA CAJA CAMION
@@ -70,7 +73,7 @@ interface CormviRecord {
   USR_CORMVI_NOMLEG: string  // NOMBRE EMPLEADO
   USR_CORMVI_CAJCAM: number | null  // VALOR DE LA CAJA CAMION
   CORMVI_PRECIO: number      // PRECIO (estándar Softland)
-  CORMVI_CANTID: number      // CANTIDAD (-1 débito / 1 crédito)
+  CORMVI_CANTID: number      // CANTIDAD — en RRFF real siempre 1 (o 0), nunca negativa
 }
 
 function gastoToCormvi(gasto: Gasto): CormviRecord {
@@ -101,7 +104,7 @@ function gastoToCormvi(gasto: Gasto): CormviRecord {
     USR_CORMVI_NOMLEG:     gasto.chofer || '',
     USR_CORMVI_CAJCAM:     gasto.valorCajaCamion ?? null,
     CORMVI_PRECIO:         gasto.importe,
-    CORMVI_CANTID:         gasto.cantidadCormvi ?? -1,
+    CORMVI_CANTID:         gasto.cantidadCormvi ?? 1,
   }
 }
 
@@ -273,7 +276,7 @@ router.post('/', async (req: Request, res: Response) => {
     rq.input('codigo_proveedor',       sql.NVarChar(64),   txt(codigoProveedor))
     rq.input('importe',                sql.Decimal(18, 4), importeNum)
     rq.input('cantidad',               sql.Decimal(18, 4), numOr(cantidad, 1))
-    rq.input('cantidad_cormvi',        sql.Decimal(18, 4), numOr(cantidadCormvi, -1))
+    rq.input('cantidad_cormvi',        sql.Decimal(18, 4), numOr(cantidadCormvi, 1))
     rq.input('coeficiente_viaje',      sql.Decimal(18, 6), numOrNull(coeficienteViaje))
     rq.input('valor_item',             sql.Decimal(18, 4), numOr(valorItemSeleccionado, importeNum))
     rq.input('valor_caja_camion',      sql.Decimal(18, 4), numOrNull(valorCajaCamion))
