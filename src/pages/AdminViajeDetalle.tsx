@@ -8,6 +8,7 @@ import {
 } from 'react-icons/fa'
 
 import { totalesPorMoneda } from '../types'
+import { resolverProveedor } from '../proveedores'
 import TotalesPorMoneda from '../components/TotalesPorMoneda'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
@@ -191,6 +192,10 @@ const COLUMNAS_FECHA: ReadonlyArray<keyof CormviRecord> = ['USR_CORMVI_FCHCAL', 
 function valorCormviTexto(reg: CormviRecord, campo: keyof CormviRecord): string {
   const v = reg[campo]
   if (v === null || v === undefined) return ''
+
+  // PROVEEDOR es un número de cuenta en Softland. El OCR guarda la razón social,
+  // así que acá se traduce: a la planilla va el número, nunca el nombre.
+  if (campo === 'CORMVI_NROCTA') return resolverProveedor(v).codigo
 
   if (COLUMNAS_FECHA.includes(campo)) {
     const d = new Date(String(v))
@@ -908,7 +913,29 @@ export default function AdminViajeDetalle() {
                           )}
                         </td>
 
-                        <Celda {...celda('codigoProveedor')} valor={reg.CORMVI_NROCTA} className="text-gray-400" />
+                        {/* Se muestra el número de cuenta arriba y la razón social
+                            abajo. A Softland viaja únicamente el número. */}
+                        <Celda
+                          {...celda('codigoProveedor')}
+                          valor={reg.CORMVI_NROCTA}
+                          className="text-gray-200"
+                          render={(v) => {
+                            const p = resolverProveedor(v)
+                            if (!p.codigo && !p.nombre) return <span className="text-gray-700">—</span>
+                            return (
+                              <span className="block leading-tight">
+                                <span className={`font-semibold ${p.codigo ? 'text-gray-100' : 'text-amber-400'}`}>
+                                  {p.codigo || 'sin código'}
+                                </span>
+                                {p.nombre && (
+                                  <span className="block text-[10px] text-gray-500 font-sans mt-0.5">
+                                    {p.nombre}
+                                  </span>
+                                )}
+                              </span>
+                            )
+                          }}
+                        />
                         <Celda {...celda('tipoProducto')}    valor={reg.CORMVI_TIPORI} className="text-blue-400 font-bold" />
                         <Celda {...celda('codigoArticulo')}  valor={reg.CORMVI_ARTORI} className="text-blue-300 font-semibold" />
 
