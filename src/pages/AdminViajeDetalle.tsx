@@ -106,13 +106,20 @@ interface CormviRecord {
  * Única fuente de verdad para la cabecera de la tabla, el copiado de filas
  * y la exportación: agregar una columna acá la propaga a los tres lugares.
  */
-const COLUMNAS_CORMVI: Array<{ campo: keyof CormviRecord; etiqueta: string; num?: boolean }> = [
-  { campo: 'CORMVI_NROCTA',     etiqueta: 'Proveedor' },
-  { campo: 'CORMVI_TIPORI',     etiqueta: 'Tipo del producto original' },
-  { campo: 'CORMVI_ARTORI',     etiqueta: 'Código de producto original' },
-  { campo: 'CORMVI_TIPCPT',     etiqueta: 'Tipo de concepto' },
-  { campo: 'CORMVI_CODCPT',     etiqueta: 'Concepto' },
-  { campo: 'CORMVI_COFLIS',     etiqueta: 'Coeficiente' },
+/**
+ * `descAlLado` marca las columnas que en Softland tienen a su derecha un campo
+ * de descripción que se completa solo y no se puede editar. Esas columnas NO se
+ * muestran en el panel —romperían la tabla visualmente y no aportan nada— pero
+ * al copiar hay que dejarles el lugar vacío: si no, todo lo que va a la derecha
+ * se pega corrido una posición.
+ */
+const COLUMNAS_CORMVI: Array<{ campo: keyof CormviRecord; etiqueta: string; num?: boolean; descAlLado?: boolean }> = [
+  { campo: 'CORMVI_NROCTA',     etiqueta: 'Proveedor',                  descAlLado: true },
+  { campo: 'CORMVI_TIPORI',     etiqueta: 'Tipo del producto original', descAlLado: true },
+  { campo: 'CORMVI_ARTORI',     etiqueta: 'Código de producto original', descAlLado: true },
+  { campo: 'CORMVI_TIPCPT',     etiqueta: 'Tipo de concepto',           descAlLado: true },
+  { campo: 'CORMVI_CODCPT',     etiqueta: 'Concepto',                   descAlLado: true },
+  { campo: 'CORMVI_COFLIS',     etiqueta: 'Coeficiente',                descAlLado: true },
   { campo: 'USR_CORMVI_NLIIVA', etiqueta: 'Informal' },
   { campo: 'USR_CORMVI_CANTID', etiqueta: 'Cantidad',  num: true },
   { campo: 'USR_CORMVI_PRECIO', etiqueta: 'Precio',    num: true },
@@ -123,18 +130,44 @@ const COLUMNAS_CORMVI: Array<{ campo: keyof CormviRecord; etiqueta: string; num?
   { campo: 'USR_CORMVI_NROLEG', etiqueta: 'Legajo' },
   { campo: 'USR_CORMVI_NROVIA', etiqueta: 'Hoja de Viaje N°' },
   { campo: 'USR_CORMVI_NROFOR', etiqueta: 'Rendición' },
-  { campo: 'USR_CORMVI_PATTRA', etiqueta: 'Tractor' },
+  { campo: 'USR_CORMVI_PATTRA', etiqueta: 'Tractor',                    descAlLado: true },
   { campo: 'USR_CORMVI_DELETE', etiqueta: 'Línea a borrar' },
   { campo: 'USR_CORMVI_FCHCAL', etiqueta: 'Fecha Salida' },
   { campo: 'USR_CORMVI_COSAVI', etiqueta: 'Coeficiente de viaje según fecha de salida', num: true },
   { campo: 'USR_CORMVI_VAITSE', etiqueta: 'Valor de item seleccionado', num: true },
-  { campo: 'USR_CORMVI_NOMLEG', etiqueta: 'Nombre Empleado' },
+  { campo: 'USR_CORMVI_NOMLEG', etiqueta: 'Nombre Empleado',            descAlLado: true },
   { campo: 'USR_CORMVI_CAJCAM', etiqueta: 'Valor de la Caja Camión', num: true },
   { campo: 'CORMVI_PRECIO',     etiqueta: 'Precio',   num: true },
   { campo: 'CORMVI_CANTID',     etiqueta: 'Cantidad', num: true },
   { campo: 'USR_CORMVI_PERIOD', etiqueta: 'Período',  num: true },
   { campo: 'USR_CORMVI_FCHLLE', etiqueta: 'Fecha de llegada' },
 ]
+
+/**
+ * Una fila con el ancho REAL que espera Softland: los 27 valores más las 8
+ * columnas de descripción intercaladas, que van vacías.
+ *
+ * Es la única forma de que al pegar cada dato caiga en su columna. Softland
+ * rellena solo esas descripciones a partir del código de la izquierda.
+ */
+function filaParaSoftland(reg: CormviRecord): string[] {
+  const celdas: string[] = []
+  for (const col of COLUMNAS_CORMVI) {
+    celdas.push(valorCormviTexto(reg, col.campo))
+    if (col.descAlLado) celdas.push('')   // hueco para la descripción automática
+  }
+  return celdas
+}
+
+/** Cabecera con el mismo ancho que `filaParaSoftland`. */
+function cabeceraParaSoftland(usarEtiquetas: boolean): string[] {
+  const celdas: string[] = []
+  for (const col of COLUMNAS_CORMVI) {
+    celdas.push(usarEtiquetas ? col.etiqueta : String(col.campo))
+    if (col.descAlLado) celdas.push(usarEtiquetas ? `Descripción ${col.etiqueta}` : `DESC_${col.campo}`)
+  }
+  return celdas
+}
 
 /** Columnas que llevan fecha y hay que formatear como dd/mm/aaaa. */
 const COLUMNAS_FECHA: ReadonlyArray<keyof CormviRecord> = ['USR_CORMVI_FCHCAL', 'USR_CORMVI_FCHLLE']
@@ -534,15 +567,14 @@ export default function AdminViajeDetalle() {
 
   const descargarCSV = () => {
     if (registrosCormvi.length === 0) return
-    // Mismo texto que el copiado al portapapeles, entrecomillado para CSV.
+    // Mismo ancho y contenido que el copiado, entrecomillado para CSV.
+    // Incluye las columnas de descripción vacías: el archivo va al mismo destino.
+    const csv = (s: string) =>
+      s.includes(';') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s
+
     const rows = [
-      COLUMNAS_CORMVI.map(c => c.campo).join(';'),
-      ...registrosCormvi.map(r =>
-        COLUMNAS_CORMVI.map(c => {
-          const s = valorCormviTexto(r, c.campo)
-          return s.includes(';') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s
-        }).join(';')
-      )
+      cabeceraParaSoftland(false).join(';'),
+      ...registrosCormvi.map(r => filaParaSoftland(r).map(csv).join(';'))
     ]
     const blob = new Blob(['\uFEFF' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -556,10 +588,8 @@ export default function AdminViajeDetalle() {
    * formato que Excel interpreta como celdas al pegar.
    */
   const copiarFilas = async (regs: CormviRecord[], marca: string, conCabecera = false) => {
-    const lineas = regs.map(r =>
-      COLUMNAS_CORMVI.map(c => valorCormviTexto(r, c.campo)).join('\t')
-    )
-    if (conCabecera) lineas.unshift(COLUMNAS_CORMVI.map(c => c.etiqueta).join('\t'))
+    const lineas = regs.map(r => filaParaSoftland(r).join('\t'))
+    if (conCabecera) lineas.unshift(cabeceraParaSoftland(true).join('\t'))
 
     try {
       await navigator.clipboard.writeText(lineas.join('\n'))
@@ -774,7 +804,7 @@ export default function AdminViajeDetalle() {
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
                   onClick={() => copiarFilas(registrosCormvi, 'todas', true)}
-                  title="Copiar las 27 columnas de todas las filas, con cabecera"
+                  title="Copiar todas las filas con cabecera, listas para pegar en Softland"
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium border transition-all ${
                     copiado === 'todas'
                       ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
