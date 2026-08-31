@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express'
 import adminDb, { sql } from '../services/adminDbService.js'
+import { requiereRolAdmin, AdminRequest } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -647,8 +648,10 @@ router.get('/:nroViaje', async (req: Request, res: Response) => {
   }
 })
 
-router.delete('/:id', async (req: Request, res: Response) => {
+// Solo rol 'admin': el operador puede revisar, corregir y aprobar, pero no borrar.
+router.delete('/:id', requiereRolAdmin, async (req: Request, res: Response) => {
   const { id } = req.params
+  const quien = (req as AdminRequest).admin?.usuario || '?'
   try {
     const rq = await adminDb.request()
     rq.input('id', sql.NVarChar(64), id)
@@ -657,7 +660,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ success: false, error: 'Gasto no encontrado' })
     }
-    console.log(`[Gastos] Eliminado: ${id}`)
+    console.log(`[Gastos] Eliminado: ${id} | por ${quien}`)
     res.json({ success: true })
   } catch (error: any) {
     return dbError(res, error, 'eliminar el gasto', true)

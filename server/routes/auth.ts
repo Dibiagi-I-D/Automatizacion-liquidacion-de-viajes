@@ -7,8 +7,19 @@ const prisma = new PrismaClient()
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-super-seguro-cambiar-en-produccion'
 
 // Usuarios administrativos (en el futuro se puede mover a la BD)
+/**
+ * Usuarios del panel administrativo.
+ *
+ * El `rol` decide qué puede hacer cada uno:
+ *   admin    → todo, incluido eliminar gastos
+ *   operador → revisar, corregir y aprobar, pero NO eliminar
+ *
+ * El rol viaja dentro del JWT, así que el backend puede validarlo sin
+ * confiar en lo que diga el navegador.
+ */
 const ADMIN_USERS = [
-  { usuario: 'veronica', password: 'veronica', nombre: 'Verónica', rol: 'admin' },
+  { usuario: 'admin',    password: 'admin588', nombre: 'Administrador', rol: 'admin'    },
+  { usuario: 'veronica', password: 'veronica', nombre: 'Verónica',      rol: 'operador' },
 ]
 
 // POST /api/auth/admin-login

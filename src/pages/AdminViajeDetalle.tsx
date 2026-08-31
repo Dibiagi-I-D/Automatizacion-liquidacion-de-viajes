@@ -285,6 +285,9 @@ export default function AdminViajeDetalle() {
   const [fotoAmpliada, setFotoAmpliada] = useState<{ url: string; titulo: string } | null>(null)
 
   const adminData = JSON.parse(sessionStorage.getItem('admin_user') || '{}')
+  // Solo el rol 'admin' elimina gastos. El backend lo vuelve a validar contra
+  // el JWT, así que esconder el botón es comodidad, no la restricción real.
+  const puedeEliminar = adminData.rol === 'admin'
   const estaAprobado = !!aprobacion
 
   // Generar registros CORMVI directamente desde los gastos (sin necesitar aprobación)
@@ -433,7 +436,12 @@ export default function AdminViajeDetalle() {
 
     setBorrando(id)
     try {
-      const res = await fetch(`${API_URL}/gastos-viaje/${id}`, { method: 'DELETE' })
+      // El token lleva el rol; sin él el backend responde 401.
+      const token = sessionStorage.getItem('admin_token') || ''
+      const res = await fetch(`${API_URL}/gastos-viaje/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
       const data = await res.json().catch(() => ({}))
       if (res.ok && data.success !== false) {
         setGastos(prev => prev.filter(x => x._localId !== id))
@@ -1034,17 +1042,19 @@ export default function AdminViajeDetalle() {
                               >
                                 <FaPen className="text-[10px]" />
                               </button>
-                              {/* El borrado vive solo acá: el chofer no elimina gastos */}
-                              <button
-                                onClick={() => eliminarGasto(g, reg)}
-                                disabled={borrando === id}
-                                title="Eliminar este gasto"
-                                className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-red-500/20 text-gray-500 hover:text-red-300 border border-white/[0.08] transition-all inline-flex items-center justify-center disabled:opacity-40"
-                              >
-                                {borrando === id
-                                  ? <FaSpinner className="text-[10px] animate-spin" />
-                                  : <FaTrash className="text-[10px]" />}
-                              </button>
+                              {/* El borrado solo lo ve el rol 'admin' */}
+                              {puedeEliminar && (
+                                <button
+                                  onClick={() => eliminarGasto(g, reg)}
+                                  disabled={borrando === id}
+                                  title="Eliminar este gasto"
+                                  className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-red-500/20 text-gray-500 hover:text-red-300 border border-white/[0.08] transition-all inline-flex items-center justify-center disabled:opacity-40"
+                                >
+                                  {borrando === id
+                                    ? <FaSpinner className="text-[10px] animate-spin" />
+                                    : <FaTrash className="text-[10px]" />}
+                                </button>
+                              )}
                             </div>
                           ) : (
                             <span className="text-gray-700 text-[10px]" title="Gasto de la API externa — no se edita ni se borra acá">API</span>
