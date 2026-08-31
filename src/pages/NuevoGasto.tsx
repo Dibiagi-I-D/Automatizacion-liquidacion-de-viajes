@@ -1,6 +1,5 @@
 import { useState, FormEvent, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useGastos } from '../context/GastosContext'
 import { useAuth } from '../context/AuthContext'
 import { Pais, BANDERAS, NOMBRES_PAIS, calcularPasoVisual } from '../types'
 import { FaCheck, FaSpinner, FaArrowLeft, FaReceipt, FaCamera, FaTimes, FaImage } from 'react-icons/fa'
@@ -18,7 +17,6 @@ export default function NuevoGasto() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { chofer } = useAuth()
-  const { loading } = useGastos()
   
   const nroViaje = searchParams.get('viaje')
   
@@ -30,7 +28,11 @@ export default function NuevoGasto() {
   const [codigoProveedor, setCodigoProveedor] = useState('')
   const [importe, setImporte] = useState('')
   const [descripcion, setDescripcion] = useState('')
-  const [showSuccess, setShowSuccess] = useState(false)
+  // Guardado: mientras dura, un cartel tapa la pantalla para que no se pueda
+  // volver a tocar el botón. Al terminar, el mismo cartel muestra el resultado.
+  const [guardando, setGuardando] = useState(false)
+  const [resultado, setResultado] = useState<{ ok: boolean; mensaje: string } | null>(null)
+  const enviando = useRef(false)
   const [gastosCount, setGastosCount] = useState(0)
 
   // Conceptos Softland
@@ -222,6 +224,11 @@ export default function NuevoGasto() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
 
+    // Guarda contra el doble toque: en un celular los dos clicks pueden llegar
+    // antes de que React vuelva a dibujar el botón deshabilitado. El ref se lee
+    // y se escribe en el acto, así que el segundo envío no pasa de acá.
+    if (enviando.current) return
+
     const importeNum = parseFloat(importe)
     if (isNaN(importeNum) || importeNum <= 0) {
       alert('Por favor ingresá un importe válido')
@@ -232,6 +239,9 @@ export default function NuevoGasto() {
       alert('No se especificó un número de viaje')
       return
     }
+
+    enviando.current = true
+    setGuardando(true)
 
     try {
       // Estos campos ya no se muestran en el formulario: normalmente los completa el
@@ -295,15 +305,19 @@ export default function NuevoGasto() {
       setCodigoProveedor('')
       // Limpiar la foto: si no, el próximo gasto se guardaría con el ticket anterior
       limpiarOCR()
-      setShowSuccess(true)
-      
-      // Ocultar mensaje de éxito después de 2 segundos
-      setTimeout(() => {
-        setShowSuccess(false)
-      }, 2000)
+
+      setResultado({ ok: true, mensaje: 'Gasto registrado' })
     } catch (err) {
       console.error('Error al guardar gasto:', err)
-      alert('Error al agregar el gasto. Por favor intentá de nuevo.')
+      setResultado({
+        ok: false,
+        mensaje: err instanceof Error && err.message
+          ? err.message
+          : 'No se pudo guardar el gasto. Revisá la señal e intentá de nuevo.',
+      })
+    } finally {
+      setGuardando(false)
+      enviando.current = false
     }
   }
 
@@ -351,11 +365,57 @@ export default function NuevoGasto() {
         </div>
       )}
 
-      {/* Mensaje de éxito */}
-      {showSuccess && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-5 py-2.5 rounded-xl shadow-lg flex items-center gap-2 animate-slide-up text-sm">
-          <FaCheck className="text-xs" />
-          <span className="font-medium">Gasto registrado correctamente</span>
+      {/*
+        Cartel de guardado. Tapa toda la pantalla a propósito: mientras el gasto
+        viaja al servidor no hay forma de volver a tocar el botón, que era lo que
+        generaba gastos duplicados cuando la conexión tardaba.
+      */}
+      {(guardando || resultado) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6 bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-xs rounded-2xl bg-[#161a22] border border-white/[0.08] p-6 text-center shadow-2xl">
+
+            {guardando && (
+              <>
+                <FaSpinner className="animate-spin text-3xl text-emerald-400 mx-auto mb-4" />
+                <p className="text-white font-semibold">Registrando gasto…</p>
+                <p className="text-gray-500 text-xs mt-1.5">
+                  No cierres la pantalla. Puede demorar unos segundos.
+                </p>
+              </>
+            )}
+
+            {!guardando && resultado && (
+              <>
+                <div className={`w-14 h-14 rounded-full mx-auto mb-4 flex items-center justify-center ${
+                  resultado.ok ? 'bg-emerald-500/15' : 'bg-red-500/15'
+                }`}>
+                  {resultado.ok
+                    ? <FaCheck className="text-xl text-emerald-400" />
+                    : <FaTimes className="text-xl text-red-400" />}
+                </div>
+                <p className={`font-semibold ${resultado.ok ? 'text-white' : 'text-red-300'}`}>
+                  {resultado.ok ? 'Gasto registrado' : 'No se pudo registrar'}
+                </p>
+                <p className="text-gray-500 text-xs mt-1.5 break-words">
+                  {resultado.ok
+                    ? `Ya quedó cargado en el viaje ${nroViaje}.`
+                    : resultado.mensaje}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setResultado(null)}
+                  autoFocus
+                  className={`w-full mt-5 min-h-[48px] rounded-xl font-semibold transition-all active:scale-95 ${
+                    resultado.ok
+                      ? 'bg-emerald-600/15 border border-emerald-500/30 text-emerald-400'
+                      : 'bg-white/[0.05] border border-white/[0.1] text-gray-300'
+                  }`}
+                >
+                  {resultado.ok ? 'OK' : 'Entendido'}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -583,13 +643,13 @@ export default function NuevoGasto() {
         {/* Botón submit */}
         <button
           type="submit"
-          className="btn-primary w-full"
-          disabled={loading}
+          className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={guardando}
         >
-          {loading ? (
+          {guardando ? (
             <>
               <FaSpinner className="animate-spin mr-2" />
-              Registrando...
+              Registrando…
             </>
           ) : (
             'Registrar Gasto'
