@@ -7,7 +7,7 @@ import {
   FaTimes, FaPen, FaSave, FaCopy, FaTrash
 } from 'react-icons/fa'
 
-import { totalesPorMoneda } from '../types'
+import { totalesPorMoneda, normalizarPais, MONEDAS, MONEDAS_SOFTLAND, BANDERAS } from '../types'
 import { resolverProveedor } from '../proveedores'
 import TotalesPorMoneda from '../components/TotalesPorMoneda'
 
@@ -78,7 +78,7 @@ interface CormviRecord {
   CORMVI_ARTORI: string        // Código de producto original
   CORMVI_TIPCPT: string        // Tipo de concepto — siempre 'A'
   CORMVI_CODCPT: string        // Concepto — siempre 'S000'
-  CORMVI_COFLIS: string        // Coeficiente — siempre 'ARS'
+  CORMVI_COFLIS: string        // Coeficiente — moneda: ARS / $CH / $UR según el país
   USR_CORMVI_NLIIVA: string    // Informal: 'S' / 'N'
   USR_CORMVI_CANTID: number    // Cantidad
   USR_CORMVI_PRECIO: number    // Precio
@@ -226,7 +226,8 @@ function gastoToCormvi(gasto: GastoAPI, fechaLlegada?: string | null): CormviRec
     CORMVI_ARTORI:         gasto.Codigo_Articulo || '',
     CORMVI_TIPCPT:         'A',
     CORMVI_CODCPT:         'S000',
-    CORMVI_COFLIS:         'ARS',
+    // Sale del país del gasto: un peaje chileno no se liquida en pesos argentinos
+    CORMVI_COFLIS:         MONEDAS_SOFTLAND[normalizarPais(gasto.Pais)],
     USR_CORMVI_NLIIVA:     gasto.Informal === 'S' ? 'S' : 'N',
     USR_CORMVI_CANTID:     gasto.Cantidad ?? 1,
     USR_CORMVI_PRECIO:     gasto.Precio_Unitario,
@@ -858,6 +859,9 @@ export default function AdminViajeDetalle() {
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[90px]">Informal</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[90px]">Cantidad</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Precio</th>
+                    {/* Columna solo informativa: NO forma parte de COLUMNAS_CORMVI,
+                        así que no se copia ni se exporta. */}
+                    <th className="text-left py-3 px-4 text-gray-500 font-bold text-xs uppercase tracking-wider min-w-[96px]">Moneda</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Total</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[150px]">Período a Liquidar</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[160px]">Observaciones</th>
@@ -969,6 +973,19 @@ export default function AdminViajeDetalle() {
                         <Celda {...celda('importe')}  valor={reg.USR_CORMVI_PRECIO}  tipo="number" alinear="right"
                                className="text-white font-bold" render={(v) => formatImporte(Number(v))} />
 
+                        {/* Moneda del gasto — solo para leer la tabla; no se copia */}
+                        <td className="py-3.5 px-4" title="Moneda del gasto. No se copia a Softland.">
+                          {(() => {
+                            const p = normalizarPais(g?.Pais)
+                            return (
+                              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                <span className="text-sm leading-none">{BANDERAS[p]}</span>
+                                <span className="text-gray-300 font-semibold">{MONEDAS[p]}</span>
+                              </span>
+                            )
+                          })()}
+                        </td>
+
                         {/* Columna virtual: cantidad × precio, no se edita */}
                         <td className="py-3.5 px-4 text-right text-gray-400 tabular-nums" title="Cantidad × Precio">
                           {formatImporte(reg.VIRT_TOTLIN)}
@@ -1069,14 +1086,14 @@ export default function AdminViajeDetalle() {
                       key={t.pais}
                       className={`bg-white/[0.03] ${i === 0 ? 'border-t-2 border-white/[0.08]' : ''}`}
                     >
-                      {/* 10 columnas de etiqueta + el importe bajo "Precio" + las 20 restantes = 31 */}
+                      {/* 10 de etiqueta + el importe bajo "Precio" + las 21 restantes = 32 */}
                       <td colSpan={10} className="py-3 px-4 text-right font-bold text-gray-400 text-xs uppercase tracking-wider">
                         Total {t.moneda}  <span className="text-gray-600 normal-case">{t.cantidad} reg.</span>
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-white text-base tabular-nums">
                         {formatImporte(t.total)}
                       </td>
-                      <td colSpan={20} />
+                      <td colSpan={21} />
                     </tr>
                   ))}
                 </tbody>

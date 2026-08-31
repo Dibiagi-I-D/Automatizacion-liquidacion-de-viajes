@@ -88,6 +88,17 @@ export const MONEDAS: Record<Pais, string> = {
   URY: 'UYU'
 }
 
+/**
+ * Códigos de moneda tal como los guarda Softland en CORMVI_COFLIS.
+ * No son los ISO: verificado sobre los 445.975 movimientos de la tabla real,
+ * donde aparecen ARS, $CH, $UR, USD y EUR.
+ */
+export const MONEDAS_SOFTLAND: Record<Pais, string> = {
+  ARG: 'ARS',
+  CHL: '$CH',
+  URY: '$UR'
+}
+
 /** Orden fijo para que los totales aparezcan siempre igual en toda la app */
 export const ORDEN_PAISES: Pais[] = ['ARG', 'CHL', 'URY']
 
