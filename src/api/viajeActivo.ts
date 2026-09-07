@@ -43,6 +43,25 @@ export type ResultadoViaje =
   /** No se pudo consultar */
   | { estado: 'error'; mensaje: string }
 
+/**
+ * Hoja tal como la devuelve GET /api/drivers/hojas-chofer-public.
+ * `esActual` marca la más reciente abierta: si hay más de una, esa es la NUEVA
+ * y las demás son las que el chofer venía usando y todavía no finalizó.
+ */
+export interface HojaChofer extends HojaDeRuta {
+  legajoChofer?: string
+  empresaChofer?: string
+  numeroInterno?: string
+  gastosCount?: number
+  totalImporte?: number
+  esActual?: boolean
+}
+
+export type ResultadoHojas =
+  | { estado: 'encontrado'; hojas: HojaChofer[]; modo: 'tiempo-real' | 'historial' }
+  | { estado: 'sin-hoja'; mensaje: string }
+  | { estado: 'error'; mensaje: string }
+
 interface ChoferLogueado {
   legajo?: string
   interno?: string
@@ -62,6 +81,67 @@ function hojaDesdeViaje(v: ViajeActivo, patenteFallback: string): HojaDeRuta {
     Observaciones: v.observaciones || '',
     Estado_Viaje: v.cerrado === 'N' ? 'Abierto' : 'Cerrado',
   }
+}
+
+/**
+ * Devuelve TODAS las hojas que el chofer tiene que ver: las que venía usando
+ * (con gastos cargados y sin finalizar) más la más reciente abierta.
+ *
+ * Es la fuente única para las pantallas de Viajes y de Rendición, así el chofer
+ * ve el mismo conjunto en las dos. Si mostraran distinto, los gastos de una hoja
+ * a medio cargar quedarían invisibles en Rendición.
+ *
+ * El backend hace el cruce contra USR_GTVIAH por patente + legajo, y descarta
+ * las que el chofer ya finalizó.
+ */
+export async function buscarHojasChofer(chofer: ChoferLogueado | null): Promise<ResultadoHojas> {
+  // Ojo con el nombre: `interno` guarda la PATENTE, no el número interno.
+  const patente = (chofer?.interno || '').trim()
+  const legajo = (chofer?.legajo || '').trim()
+  const nombre = (chofer?.nombreCompleto || '').trim()
+
+  if (!patente) {
+    return { estado: 'error', mensaje: 'No hay un tractor asociado a esta sesión. Volvé a ingresar.' }
+  }
+  if (!legajo) {
+    return { estado: 'error', mensaje: 'No hay un legajo asociado a esta sesión. Volvé a ingresar.' }
+  }
+
+  let sqlDisponible = true
+  try {
+    const res = await fetch(
+      `${API_URL}/drivers/hojas-chofer-public` +
+      `?patente=${encodeURIComponent(patente)}` +
+      `&legajo=${encodeURIComponent(legajo)}`
+    )
+    const data = await res.json()
+
+    if (data.sqlError) {
+      sqlDisponible = false
+    } else if (data.success && Array.isArray(data.data) && data.data.length > 0) {
+      return { estado: 'encontrado', hojas: data.data as HojaChofer[], modo: 'tiempo-real' }
+    } else {
+      return {
+        estado: 'sin-hoja',
+        mensaje: data.message ||
+          `No encontramos una hoja de ruta abierta para ${nombre || 'este chofer'} ` +
+          `con el tractor ${patente}. Verificá que hayas seleccionado tu tractor al ingresar.`,
+      }
+    }
+  } catch {
+    sqlDisponible = false
+  }
+
+  if (sqlDisponible) {
+    return { estado: 'error', mensaje: 'No se pudo determinar tus viajes. Intentá de nuevo en unos segundos.' }
+  }
+
+  // ── Fallback: base caída → historial de la API externa, una sola hoja ──
+  const unica = await buscarViajeActivo(chofer)
+  if (unica.estado === 'encontrado') {
+    return { estado: 'encontrado', hojas: [unica.hoja], modo: unica.modo }
+  }
+  return unica
 }
 
 /**

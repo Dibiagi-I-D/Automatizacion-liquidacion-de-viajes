@@ -184,6 +184,21 @@ const COLS = [
 /** Lista para SELECT: columnas livianas + flag de existencia de foto. */
 const SELECT_LIST = `${COLS.join(', ')}, CASE WHEN foto IS NULL THEN 0 ELSE 1 END AS tiene_foto`
 
+/**
+ * Tipos de fila de dbo.gastos_viaje.
+ *
+ * La tabla guarda dos cosas distintas:
+ *   GASTO        → un gasto real cargado por el chofer
+ *   FINALIZACION → marcador: el chofer dio por cerrada esa hoja de ruta en SU
+ *                  interfaz. No cierra nada en Softland ni afecta al panel admin.
+ *
+ * ⚠️ TODA lectura de gastos tiene que filtrar por SOLO_GASTOS. Si no, los
+ * marcadores se cuelan en los totales, en el panel /admin y en el export CORMVI.
+ */
+const TIPO_GASTO = 'GASTO'
+const TIPO_FINALIZACION = 'FINALIZACION'
+const SOLO_GASTOS = `registro_tipo = '${TIPO_GASTO}'`
+
 /** Lista para OUTPUT de INSERT/UPDATE (mismas columnas, prefijadas). */
 const OUTPUT_LIST =
   `${COLS.map(c => `INSERTED.${c}`).join(', ')}, ` +
@@ -225,7 +240,7 @@ const numOrNull = (v: any): number | null => (v === undefined || v === null || v
 router.get('/', async (req: Request, res: Response) => {
   try {
     const rq = await adminDb.request()
-    const result = await rq.query(`SELECT ${SELECT_LIST} FROM dbo.gastos_viaje ORDER BY created_at DESC`)
+    const result = await rq.query(`SELECT ${SELECT_LIST} FROM dbo.gastos_viaje WHERE ${SOLO_GASTOS} ORDER BY created_at DESC`)
     const data = result.recordset.map(rowToGasto)
     res.json({ success: true, data, total: data.length })
   } catch (error: any) {
@@ -410,7 +425,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 router.get('/resumen/por-viaje', async (req: Request, res: Response) => {
   try {
     const rq = await adminDb.request()
-    const result = await rq.query(`SELECT ${SELECT_LIST} FROM dbo.gastos_viaje`)
+    const result = await rq.query(`SELECT ${SELECT_LIST} FROM dbo.gastos_viaje WHERE ${SOLO_GASTOS}`)
 
     const resumen: Record<number, { gastos: Gasto[]; total: number; cantidad: number }> = {}
     result.recordset.map(rowToGasto).forEach(g => {
@@ -463,7 +478,7 @@ router.post('/aprobaciones/:nroViaje', async (req: Request, res: Response) => {
     rqTotal.input('nro_viaje', sql.Int, nroViaje)
     const totalRes = await rqTotal.query(`
       SELECT COUNT(*) AS cantidad, ISNULL(SUM(importe), 0) AS total
-      FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje
+      FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje AND ${SOLO_GASTOS}
     `)
 
     if (Number(totalRes.recordset[0].cantidad) === 0) {
@@ -553,7 +568,7 @@ router.get('/exportar-cormvi/:nroViaje', async (req: Request, res: Response) => 
     const rq = await adminDb.request()
     rq.input('nro_viaje', sql.Int, nroViaje)
     const result = await rq.query(`
-      SELECT ${SELECT_LIST} FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje ORDER BY created_at
+      SELECT ${SELECT_LIST} FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje AND ${SOLO_GASTOS} ORDER BY created_at
     `)
 
     const gastosDelViaje = result.recordset.map(rowToGasto)
@@ -626,6 +641,130 @@ router.get('/:id/foto', async (req: Request, res: Response) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
+// FINALIZACIÓN DE HOJA DE RUTA (interfaz del chofer)
+//
+// Cuando al chofer le aparece una hoja nueva y todavía le falta cargar
+// gastos en la anterior, las dos quedan visibles. Al marcar "finalizar"
+// deja de verla.
+//
+// Se guarda como fila marcadora en gastos_viaje (registro_tipo =
+// 'FINALIZACION'), sin tabla aparte. Es SOLO de la vista del chofer:
+// no cierra nada en Softland ni afecta al panel /admin ni al export.
+//
+// Rutas de 2 segmentos → no las captura GET /:nroViaje.
+// ═══════════════════════════════════════════════════════════════
+
+/** id determinístico del marcador: una finalización por viaje + legajo. */
+const idFinalizacion = (nroViaje: number, legajo: string) =>
+  `FIN-${nroViaje}-${legajo || 'SINLEG'}`
+
+// ─── GET /api/gastos-viaje/finalizadas/lista ── Viajes finalizados por un chofer ───
+router.get('/finalizadas/lista', async (req: Request, res: Response) => {
+  const legajo = txt(req.query.legajo)
+  try {
+    const rq = await adminDb.request()
+    rq.input('registro_tipo', sql.NVarChar(16), TIPO_FINALIZACION)
+    let where = 'registro_tipo = @registro_tipo'
+    if (legajo) {
+      rq.input('legajo', sql.NVarChar(64), legajo)
+      where += ' AND LTRIM(RTRIM(legajo_chofer)) = @legajo'
+    }
+    const result = await rq.query(`
+      SELECT nro_viaje, legajo_chofer, chofer, patente_tractor, created_at
+      FROM dbo.gastos_viaje WHERE ${where} ORDER BY created_at DESC
+    `)
+
+    res.json({
+      success: true,
+      data: result.recordset.map(r => ({
+        nroViaje: r.nro_viaje,
+        legajoChofer: (r.legajo_chofer || '').trim(),
+        chofer: r.chofer || '',
+        patenteTractor: r.patente_tractor || '',
+        finalizadaAt: r.created_at ? new Date(r.created_at).toISOString() : '',
+      })),
+    })
+  } catch (error: any) {
+    return dbError(res, error, 'obtener las hojas finalizadas')
+  }
+})
+
+// ─── POST /api/gastos-viaje/finalizar/:nroViaje ── El chofer cierra la hoja ───
+router.post('/finalizar/:nroViaje', async (req: Request, res: Response) => {
+  const nroViaje = parseInt(req.params.nroViaje)
+  const { legajoChofer, chofer, patenteTractor } = req.body
+
+  if (!Number.isFinite(nroViaje)) {
+    return res.status(400).json({ success: false, error: 'Número de viaje inválido' })
+  }
+
+  const legajo = txt(legajoChofer)
+  if (!legajo) {
+    return res.status(400).json({ success: false, error: 'El legajo del chofer es requerido' })
+  }
+
+  try {
+    const rq = await adminDb.request()
+    rq.input('id',              sql.NVarChar(64),   idFinalizacion(nroViaje, legajo))
+    rq.input('nro_viaje',       sql.Int,            nroViaje)
+    rq.input('registro_tipo',   sql.NVarChar(16),   TIPO_FINALIZACION)
+    rq.input('tipo',            sql.NVarChar(200),  'Hoja de ruta finalizada por el chofer')
+    rq.input('legajo_chofer',   sql.NVarChar(64),   legajo)
+    rq.input('chofer',          sql.NVarChar(200),  txt(chofer))
+    rq.input('patente_tractor', sql.NVarChar(64),   txt(patenteTractor))
+
+    // MERGE → idempotente: tocar "finalizar" dos veces no duplica el marcador
+    await rq.query(`
+      MERGE dbo.gastos_viaje AS t
+      USING (SELECT @id AS id) AS s ON t.id = s.id
+      WHEN NOT MATCHED THEN
+        INSERT (id, nro_viaje, registro_tipo, tipo, legajo_chofer, chofer,
+                patente_tractor, importe, cantidad, cantidad_cormvi)
+        VALUES (@id, @nro_viaje, @registro_tipo, @tipo, @legajo_chofer, @chofer,
+                @patente_tractor, 0, 0, 0);
+    `)
+
+    console.log(`[GastosViaje] 🏁 Viaje ${nroViaje} finalizado por el chofer (legajo ${legajo})`)
+    res.json({
+      success: true,
+      data: { nroViaje, legajoChofer: legajo, finalizada: true },
+    })
+  } catch (error: any) {
+    return dbError(res, error, 'finalizar la hoja de ruta', true)
+  }
+})
+
+// ─── DELETE /api/gastos-viaje/finalizar/:nroViaje ── Revertir (soporte) ───
+// No está expuesto en la app del chofer. Existe para poder deshacer una
+// finalización tocada por error sin tener que entrar a la base a mano.
+router.delete('/finalizar/:nroViaje', async (req: Request, res: Response) => {
+  const nroViaje = parseInt(req.params.nroViaje)
+  const legajo = txt(req.query.legajo || req.body?.legajoChofer)
+
+  if (!Number.isFinite(nroViaje) || !legajo) {
+    return res.status(400).json({ success: false, error: 'Se requieren nroViaje y legajo' })
+  }
+
+  try {
+    const rq = await adminDb.request()
+    rq.input('id',            sql.NVarChar(64), idFinalizacion(nroViaje, legajo))
+    rq.input('registro_tipo', sql.NVarChar(16), TIPO_FINALIZACION)
+    const result = await rq.query(`
+      DELETE FROM dbo.gastos_viaje WHERE id = @id AND registro_tipo = @registro_tipo
+    `)
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ success: false, error: 'Esa hoja no estaba finalizada' })
+    }
+
+    console.log(`[GastosViaje] ↩️ Reabierto viaje ${nroViaje} (legajo ${legajo})`)
+    res.json({ success: true, data: { nroViaje, legajoChofer: legajo, finalizada: false } })
+  } catch (error: any) {
+    return dbError(res, error, 'reabrir la hoja de ruta', true)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
 // RUTAS PARAMÉTRICAS — DEBEN IR AL FINAL (catchall)
 // ═══════════════════════════════════════════════════════════════
 
@@ -639,7 +778,7 @@ router.get('/:nroViaje', async (req: Request, res: Response) => {
     const rq = await adminDb.request()
     rq.input('nro_viaje', sql.Int, nroViaje)
     const result = await rq.query(`
-      SELECT ${SELECT_LIST} FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje ORDER BY created_at
+      SELECT ${SELECT_LIST} FROM dbo.gastos_viaje WHERE nro_viaje = @nro_viaje AND ${SOLO_GASTOS} ORDER BY created_at
     `)
     const data = result.recordset.map(rowToGasto)
     res.json({ success: true, data, total: data.length })
@@ -655,7 +794,7 @@ router.delete('/:id', requiereRolAdmin, async (req: Request, res: Response) => {
   try {
     const rq = await adminDb.request()
     rq.input('id', sql.NVarChar(64), id)
-    const result = await rq.query('DELETE FROM dbo.gastos_viaje WHERE id = @id')
+    const result = await rq.query(`DELETE FROM dbo.gastos_viaje WHERE id = @id AND ${SOLO_GASTOS}`)
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ success: false, error: 'Gasto no encontrado' })

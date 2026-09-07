@@ -2,20 +2,11 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FaTruck, FaSpinner, FaMapMarkedAlt, FaCalendarAlt, FaCheckCircle, FaClock, FaPlus, FaUser, FaTrailer, FaSatelliteDish } from 'react-icons/fa'
 import { useAuth } from '../context/AuthContext'
+// Fuente única compartida con la pantalla de Rendición: las dos tienen que
+// mostrar el mismo conjunto de hojas o los gastos de una quedan invisibles en la otra.
+import { buscarHojasChofer, HojaChofer } from '../api/viajeActivo'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
-
-interface HojaDeRuta {
-  Cod_Empresa: string
-  Nro_Viaje: number
-  Fecha_Salida: string
-  Fecha_Llegada: string | null
-  Nombre_Chofer: string
-  Patente_Tractor: string
-  Patente_Semirremolque: string
-  Observaciones: string
-  Estado_Viaje: string
-}
 
 interface ViajeActivo {
   nroViaje: number
@@ -41,13 +32,56 @@ interface ViajeActivo {
 export default function HojasDeRuta() {
   const navigate = useNavigate()
   const { chofer } = useAuth()
-  const [hojasDeRuta, setHojasDeRuta] = useState<HojaDeRuta[]>([])
+  const [hojasDeRuta, setHojasDeRuta] = useState<HojaChofer[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [gastosCount, setGastosCount] = useState<Record<number, number>>({})
   const [viajeActivo, setViajeActivo] = useState<ViajeActivo | null>(null)
   const [modoDeteccion, setModoDeteccion] = useState<'tiempo-real' | 'historial'>('historial')
+  const [finalizando, setFinalizando] = useState<number | null>(null)
+
+  /**
+   * El chofer da por cerrada una hoja: ya cargó todo lo que tenía.
+   * Solo afecta a SU pantalla — no cierra nada en Softland ni toca el panel
+   * de administración, donde los gastos siguen visibles y exportables.
+   */
+  const finalizarHoja = async (hoja: HojaChofer) => {
+    const cantidad = hoja.gastosCount ?? gastosCount[hoja.Nro_Viaje] ?? 0
+    const ok = confirm(
+      `¿Finalizar el viaje ${hoja.Nro_Viaje}?\n\n` +
+      `Tenés ${cantidad} gasto${cantidad === 1 ? '' : 's'} cargado${cantidad === 1 ? '' : 's'}.\n` +
+      `Dejará de aparecerte en la lista. Los gastos ya cargados no se borran.`
+    )
+    if (!ok) return
+
+    try {
+      setFinalizando(hoja.Nro_Viaje)
+      const resp = await fetch(`${API_URL}/gastos-viaje/finalizar/${hoja.Nro_Viaje}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          legajoChofer: (chofer?.legajo || '').trim(),
+          chofer: (chofer as any)?.nombreCompleto || '',
+          patenteTractor: chofer?.interno || '',
+        }),
+      })
+      const data = await resp.json()
+
+      if (!resp.ok || !data.success) {
+        alert(data.error || 'No se pudo finalizar la hoja de ruta. Intentá de nuevo.')
+        return
+      }
+
+      // Sale de la lista sin recargar toda la pantalla
+      setHojasDeRuta(prev => prev.filter(h => h.Nro_Viaje !== hoja.Nro_Viaje))
+    } catch (err) {
+      console.error('Error al finalizar hoja:', err)
+      alert('No hay conexión. La hoja no se finalizó — intentá de nuevo.')
+    } finally {
+      setFinalizando(null)
+    }
+  }
 
   /**
    * Conteo de gastos por viaje, pidiendo SOLO los viajes que se muestran.
@@ -97,110 +131,27 @@ export default function HojasDeRuta() {
       const patenteTractor = chofer?.interno || ''
       const legajoChofer = (chofer?.legajo || '').trim()
 
-      // PASO 1: Buscar la hoja de ruta ABIERTA que corresponde al chofer + tractor
-      // del login. El backend cruza USR_GTVIAH_PATTRA con USR_GTVIAH_NROLEG, así que
-      // si el tractor no es el de este chofer, no devuelve nada (found: false).
-      let sqlDisponible = true
-      try {
-        if (patenteTractor) {
-          console.log('🛰️ Buscando hoja abierta para:', patenteTractor, '| legajo:', legajoChofer)
-          const viajeResponse = await fetch(
-            `${API_URL}/drivers/viaje-activo-public` +
-            `?patente=${encodeURIComponent(patenteTractor)}` +
-            `&legajo=${encodeURIComponent(legajoChofer)}`
-          )
-          const viajeData = await viajeResponse.json()
+      // Hojas del chofer + tractor del login.
+      //
+      // Se usa el MISMO helper que la pantalla de Rendición para que las dos
+      // muestren siempre el mismo conjunto: las que venía usando (con gastos
+      // sin finalizar) más la más reciente abierta. Cuando cada pantalla tenía
+      // su propia carga, los gastos de una hoja a medio cargar quedaban
+      // invisibles en Rendición.
+      const resultado = await buscarHojasChofer(chofer as any)
 
-          // sqlError = SQL Server caído → recién ahí tiene sentido el fallback histórico
-          if (viajeData.sqlError) {
-            sqlDisponible = false
-          } else if (viajeData.success && viajeData.found && viajeData.data?.nroViaje) {
-            const viaje = viajeData.data as ViajeActivo
-            setViajeActivo(viaje)
-            setModoDeteccion('tiempo-real')
-            console.log('✅ Hoja de ruta asignada:', viaje.nroViaje)
-
-            // Construir la hoja de ruta directamente con datos de SQL Server (USR_GTVIAH)
-            const hojaSQL: HojaDeRuta = {
-              Cod_Empresa: viaje.codEmpresa || '',
-              Nro_Viaje: viaje.nroViaje,
-              Fecha_Salida: viaje.fechaSalida || '',
-              Fecha_Llegada: viaje.fechaLlegada || null,
-              Nombre_Chofer: viaje.chofer || '',
-              Patente_Tractor: viaje.patente || patenteTractor,
-              Patente_Semirremolque: viaje.patenteSemi || '',
-              Observaciones: viaje.observaciones || '',
-              Estado_Viaje: viaje.cerrado === 'N' ? 'Abierto' : 'Cerrado'
-            }
-
-            setHojasDeRuta([hojaSQL])
-            setLoading(false)
-            return // Listo, no necesitamos la API externa
-          } else {
-            // SQL respondió bien y este chofer NO tiene hoja abierta con este tractor.
-            // No hay que caer al fallback: devolvería la hoja de otro chofer.
-            console.log('⛔ Sin hoja abierta para este chofer + tractor')
-            setHojasDeRuta([])
-            setError(
-              `No encontramos una hoja de ruta abierta para ${(chofer as any)?.nombreCompleto || 'este chofer'} ` +
-              `con el tractor ${patenteTractor}. Verificá que hayas seleccionado tu tractor al ingresar.`
-            )
-            setLoading(false)
-            return
-          }
-        }
-      } catch (err) {
-        sqlDisponible = false
-        console.log('⚠️ SQL Server no disponible, se intentará con la API externa')
-      }
-
-      if (!sqlDisponible) {
-        console.log('↩️ Fallback: buscando en el historial de la API externa')
-      }
-
-      // PASO 2: Fallback → Obtener hojas de ruta de la API externa
-      setModoDeteccion('historial')
-      const nombreChofer = (chofer as any)?.nombreCompleto || ''
-
-      const response = await fetch(`${API_URL}/drivers/roadmaps-public`)
-      
-      if (response.status === 500) {
-        setError('⚠️ Error en la API de hojas de ruta. El servidor externo está devolviendo un error 500. Por favor contacta al administrador del sistema.')
-        setLoading(false)
-        return
-      }
-      
-      const data = await response.json()
-      
-      if (!data.success) {
-        setError(data.message || 'Error al cargar hojas de ruta')
-        return
-      }
-
-      // Filtrar hojas de ruta del chofer + tractor logueado
-      const hojasFiltradas = data.data.filter((hoja: HojaDeRuta) => {
-        if (!hoja.Nombre_Chofer || !hoja.Patente_Tractor) return false
-        
-        const nombreHojaNorm = (hoja.Nombre_Chofer || '').trim().toUpperCase()
-        const nombreChoferNorm = (nombreChofer || '').trim().toUpperCase()
-        const patenteHojaNorm = (hoja.Patente_Tractor || '').trim().toUpperCase().replace(/\s+/g, '')
-        const patenteTractorNorm = (patenteTractor || '').trim().toUpperCase().replace(/\s+/g, '')
-        
-        return nombreHojaNorm === nombreChoferNorm && patenteHojaNorm === patenteTractorNorm
-      })
-      
-      // Ordenar por número de viaje descendente (más reciente primero)
-      const hojasOrdenadas = hojasFiltradas.sort((a: HojaDeRuta, b: HojaDeRuta) => b.Nro_Viaje - a.Nro_Viaje)
-
-      console.log('📋 Hojas del chofer+tractor:', hojasOrdenadas.length, hojasOrdenadas.map((h: HojaDeRuta) => h.Nro_Viaje))
-
-      // Mostrar solo la más reciente
-      if (hojasOrdenadas.length > 0) {
-        console.log('📌 Mostrando solo la hoja más reciente:', hojasOrdenadas[0].Nro_Viaje)
-        setHojasDeRuta([hojasOrdenadas[0]])
+      if (resultado.estado === 'encontrado') {
+        setModoDeteccion(resultado.modo)
+        console.log('✅ Hojas asignadas:', resultado.hojas.map(h => h.Nro_Viaje))
+        setHojasDeRuta(resultado.hojas)
       } else {
         setHojasDeRuta([])
+        setError(resultado.mensaje)
       }
+
+      setLoading(false)
+      return
+
     } catch (err) {
       console.error('Error al cargar hojas de ruta:', err)
       setError('⚠️ La API de hojas de ruta está devolviendo un error. Por favor contacta al administrador del sistema o intenta más tarde.')
@@ -360,11 +311,39 @@ export default function HojasDeRuta() {
         </div>
       ) : (
         <div className="space-y-3">
-          {filteredHojas.map((hoja) => (
+          {filteredHojas.map((hoja) => {
+            // Con más de una hoja en pantalla, la más reciente es la NUEVA
+            // y las otras son las que el chofer venía usando.
+            const hayVarias = filteredHojas.length > 1
+            const esNueva = hayVarias && hoja.esActual === true
+            const pendiente = hayVarias && hoja.esActual !== true
+            const cantidad = hoja.gastosCount ?? gastosCount[hoja.Nro_Viaje] ?? 0
+
+            return (
             <div
               key={`${hoja.Cod_Empresa}-${hoja.Nro_Viaje}`}
-              className="glass-card p-4"
+              className={`glass-card p-4 ${
+                esNueva ? 'border border-blue-500/30 bg-blue-500/[0.03]' : ''
+              }${pendiente ? 'border border-amber-500/25 bg-amber-500/[0.03]' : ''}`}
             >
+              {/* Franja de contexto cuando hay más de una hoja */}
+              {esNueva && (
+                <div className="flex items-center gap-1.5 mb-2.5 -mt-0.5">
+                  <FaSatelliteDish className="text-blue-400 text-[10px]" />
+                  <span className="text-[10px] font-semibold text-blue-400 tracking-wide">
+                    HOJA DE RUTA NUEVA
+                  </span>
+                </div>
+              )}
+              {pendiente && (
+                <div className="flex items-center gap-1.5 mb-2.5 -mt-0.5">
+                  <FaClock className="text-amber-400 text-[10px]" />
+                  <span className="text-[10px] font-semibold text-amber-400 tracking-wide">
+                    LA QUE VENÍAS USANDO — TERMINÁ DE CARGAR ACÁ
+                  </span>
+                </div>
+              )}
+
               {/* Header */}
               <div className="flex items-start justify-between mb-3">
                 <div>
@@ -382,11 +361,11 @@ export default function HojasDeRuta() {
                   </div>
                   <p className="text-xs text-gray-500">{hoja.Cod_Empresa}</p>
                 </div>
-                
+
                 {/* Contador de gastos */}
-                {gastosCount[hoja.Nro_Viaje] && gastosCount[hoja.Nro_Viaje] > 0 && (
+                {cantidad > 0 && (
                   <span className="text-[10px] font-medium bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-md">
-                    {gastosCount[hoja.Nro_Viaje]} gasto{gastosCount[hoja.Nro_Viaje] !== 1 ? 's' : ''}
+                    {cantidad} gasto{cantidad !== 1 ? 's' : ''}
                   </span>
                 )}
               </div>
@@ -422,8 +401,8 @@ export default function HojasDeRuta() {
                 </div>
               )}
 
-              {/* Botón para agregar gastos */}
-              <div className="pt-3 border-t border-white/[0.04]">
+              {/* Acciones */}
+              <div className="pt-3 border-t border-white/[0.04] space-y-2">
                 <button
                   className="btn-primary w-full text-sm"
                   onClick={() => {
@@ -431,11 +410,37 @@ export default function HojasDeRuta() {
                   }}
                 >
                   <FaPlus className="mr-2 text-xs" />
-                  Agregar Gasto
+                  Agregar gasto al viaje {hoja.Nro_Viaje}
                 </button>
+
+                {/*
+                  Finalizar: el chofer avisa que ya no le queda nada por cargar
+                  en esta hoja y deja de verla. Solo se ofrece cuando hay más de
+                  una hoja en pantalla — si es la única, no tiene sentido.
+                */}
+                {hayVarias && (
+                  <button
+                    className="w-full text-xs py-2.5 rounded-lg border border-red-500/30 bg-red-500/[0.06] text-red-400 font-medium hover:bg-red-500/15 hover:border-red-500/50 hover:text-red-300 active:bg-red-500/20 transition disabled:opacity-50 disabled:hover:bg-red-500/[0.06]"
+                    onClick={() => finalizarHoja(hoja)}
+                    disabled={finalizando === hoja.Nro_Viaje}
+                  >
+                    {finalizando === hoja.Nro_Viaje ? (
+                      <>
+                        <FaSpinner className="inline animate-spin mr-2 text-[10px]" />
+                        Finalizando...
+                      </>
+                    ) : (
+                      <>
+                        <FaCheckCircle className="inline mr-2 text-[10px]" />
+                        Ya cargué todo — finalizar viaje {hoja.Nro_Viaje}
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

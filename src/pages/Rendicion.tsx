@@ -1,10 +1,10 @@
 ﻿import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { FaTruck, FaSpinner, FaCalendarAlt, FaEye, FaChevronRight } from 'react-icons/fa'
+import { FaTruck, FaSpinner, FaCalendarAlt, FaEye, FaChevronRight, FaSatelliteDish, FaClock } from 'react-icons/fa'
 import { Pais, totalesPorMoneda } from '../types'
 import TotalesPorMoneda from '../components/TotalesPorMoneda'
-import { buscarViajeActivo, HojaDeRuta } from '../api/viajeActivo'
+import { buscarHojasChofer, HojaChofer } from '../api/viajeActivo'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
@@ -25,7 +25,7 @@ interface Gasto {
 export default function Rendicion() {
   const navigate = useNavigate()
   const { chofer } = useAuth()
-  const [hojasDeRuta, setHojasDeRuta] = useState<HojaDeRuta[]>([])
+  const [hojasDeRuta, setHojasDeRuta] = useState<HojaChofer[]>([])
   const [gastos, setGastos] = useState<Gasto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -85,20 +85,20 @@ export default function Rendicion() {
     totalesPorMoneda(gastos.filter(g => g.nroViaje === nroViaje))
 
   /**
-   * Carga UNA sola hoja de ruta: la que el chofer está usando en este momento.
+   * Carga las MISMAS hojas que muestra la pantalla de Viajes: las que el chofer
+   * venía usando (con gastos sin finalizar) más la más reciente abierta.
    *
-   * Antes se mostraba la más reciente más todas las de ±10 días, y aparecían
-   * viajes ya cerrados que al chofer no le aportan nada. Ahora usa la misma
-   * detección que la pantalla de Viajes (patente + legajo contra USR_GTVIAH).
+   * Antes traía una sola. Si a mitad de viaje aparecía una hoja nueva, acá se
+   * veía únicamente esa y los gastos cargados en la anterior quedaban invisibles.
    */
   const cargarHojasDeRuta = async () => {
     setLoading(true)
     setError('')
 
-    const resultado = await buscarViajeActivo(chofer as any)
+    const resultado = await buscarHojasChofer(chofer as any)
 
     if (resultado.estado === 'encontrado') {
-      setHojasDeRuta([resultado.hoja])
+      setHojasDeRuta(resultado.hojas)
     } else {
       setHojasDeRuta([])
       if (resultado.estado === 'error') setError(resultado.mensaje)
@@ -152,8 +152,8 @@ export default function Rendicion() {
       </div>
 
       {/*
-        Sin tarjeta de totales generales: el chofer trabaja sobre una sola hoja
-        de ruta y el detalle completo está en "Ver detalle" de esa hoja.
+        Sin tarjeta de totales generales: el detalle completo de cada hoja está
+        en su propio "Ver detalle".
       */}
 
       {hojasDeRuta.length === 0 ? (
@@ -170,8 +170,36 @@ export default function Rendicion() {
             const totalesViaje = totalesDelViaje(hoja.Nro_Viaje)
             const cantidadGastos = gastosCount[hoja.Nro_Viaje] || 0
 
+            // Mismo lenguaje visual que la pantalla de Viajes: con más de una
+            // hoja, la más reciente es la NUEVA y las otras son las que venía usando.
+            const hayVarias = hojasDeRuta.length > 1
+            const esNueva = hayVarias && hoja.esActual === true
+            const pendiente = hayVarias && hoja.esActual !== true
+
             return (
-              <div key={`${hoja.Cod_Empresa}-${hoja.Nro_Viaje}`} className="glass-card p-4">
+              <div
+                key={`${hoja.Cod_Empresa}-${hoja.Nro_Viaje}`}
+                className={`glass-card p-4 ${
+                  esNueva ? 'border border-blue-500/30 bg-blue-500/[0.03]' : ''
+                }${pendiente ? 'border border-amber-500/25 bg-amber-500/[0.03]' : ''}`}
+              >
+                {esNueva && (
+                  <div className="flex items-center gap-1.5 mb-2.5 -mt-0.5">
+                    <FaSatelliteDish className="text-blue-400 text-[10px]" />
+                    <span className="text-[10px] font-semibold text-blue-400 tracking-wide">
+                      HOJA DE RUTA NUEVA
+                    </span>
+                  </div>
+                )}
+                {pendiente && (
+                  <div className="flex items-center gap-1.5 mb-2.5 -mt-0.5">
+                    <FaClock className="text-amber-400 text-[10px]" />
+                    <span className="text-[10px] font-semibold text-amber-400 tracking-wide">
+                      LA QUE VENÍAS USANDO
+                    </span>
+                  </div>
+                )}
+
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-0.5">

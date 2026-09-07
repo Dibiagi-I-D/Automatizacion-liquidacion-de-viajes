@@ -155,8 +155,28 @@ class AdminDbService {
         ALTER TABLE dbo.gastos_viaje ADD foto_subida_at DATETIME2(3) NULL;
     `)
 
+    // ── Migración 003: estado de finalización de la hoja de ruta ─────
+    // El chofer marca "ya cargué todo" en una hoja. Ese hecho se guarda como
+    // una FILA MARCADORA en gastos_viaje (registro_tipo = 'FINALIZACION'),
+    // no como tabla aparte.
+    //
+    // ⚠️ Toda lectura de gastos debe filtrar registro_tipo = 'GASTO' o las
+    // filas marcadoras se colarían en totales, panel admin y export CORMVI.
+    // El DEFAULT deja las filas existentes como 'GASTO'.
+    await pool.request().batch(`
+      IF COL_LENGTH('dbo.gastos_viaje', 'registro_tipo') IS NULL
+        ALTER TABLE dbo.gastos_viaje
+          ADD registro_tipo NVARCHAR(16) NOT NULL
+              CONSTRAINT DF_gv_registro_tipo DEFAULT ('GASTO');
+    `)
+    await pool.request().batch(`
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_gastos_viaje_registro_tipo')
+        CREATE INDEX IX_gastos_viaje_registro_tipo
+          ON dbo.gastos_viaje (registro_tipo, nro_viaje);
+    `)
+
     this.schemaReady = true
-    console.log('✅ [AdminDB] Esquema verificado (gastos_viaje, aprobaciones_viaje, foto)')
+    console.log('✅ [AdminDB] Esquema verificado (gastos_viaje, aprobaciones_viaje, foto, registro_tipo)')
   }
 
   /** Request listo para usar, con el esquema ya garantizado. */

@@ -2,8 +2,19 @@ import { Router, Request, Response } from 'express';
 import driversApiService from '../services/driversApiService.js';
 import { authenticateToken } from '../middleware/auth.js';
 import sqlServerService from '../services/sqlServerService.js';
+import adminDb, { sql as adminSql } from '../services/adminDbService.js';
 
 const router = Router();
+
+/**
+ * Ventana de antigüedad para las hojas de ruta del chofer.
+ *
+ * En Softland, CERRAD='N' no significa "viaje en curso" sino "administración
+ * todavía no lo cerró": hay choferes con 4, 5 o 6 hojas abiertas a la vez y
+ * algunas de hace meses. Sin esta ventana, al chofer le aparecerían hojas
+ * viejas que ya no le sirven.
+ */
+const VENTANA_HOJAS_DIAS = 30;
 
 /**
  * GET /api/drivers/active-public
@@ -290,6 +301,193 @@ router.get('/viaje-activo-public', async (req: Request, res: Response) => {
       success: false,
       error: 'Error al consultar viaje activo',
       message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/drivers/hojas-chofer-public
+ * Hojas de ruta que el chofer tiene que ver en su pantalla.
+ *
+ * PROBLEMA QUE RESUELVE
+ * El chofer venía cargando gastos en una hoja y, en pleno viaje, Softland le
+ * abre una nueva. Mostrando solo la última, perdía el acceso a la anterior con
+ * gastos a medio cargar.
+ *
+ * QUÉ DEVUELVE (conjunto derivado, no "todas las abiertas")
+ *   { hojas con gastos cargados por este chofer y no finalizadas }
+ *   ∪ { la hoja abierta más reciente }
+ *
+ * No alcanza con listar CERRAD='N': hay choferes con 6 hojas abiertas porque
+ * administración no las cierra. Derivar la lista de los gastos ya cargados
+ * evita ese ruido y no necesita guardar cuál hoja "estaba usando".
+ *
+ * ORDEN: primero las que ya venía usando (con gastos), al final la más
+ * reciente marcada con esActual — así no pierde de vista lo que le falta.
+ *
+ * Query params:
+ *  - patente: Patente del tractor logueado (obligatorio)
+ *  - legajo:  Legajo del chofer logueado   (obligatorio)
+ */
+router.get('/hojas-chofer-public', async (req: Request, res: Response) => {
+  try {
+    const { patente, legajo } = req.query;
+
+    if (!patente || typeof patente !== 'string') {
+      return res.status(400).json({ success: false, error: 'El parámetro "patente" es requerido' });
+    }
+    if (!legajo || typeof legajo !== 'string' || !legajo.trim()) {
+      return res.status(400).json({ success: false, error: 'El parámetro "legajo" es requerido' });
+    }
+
+    const patenteNorm = patente.trim().toUpperCase();
+    const legajoNorm = legajo.trim();
+
+    console.log(`🔍 [Hojas Chofer] patente ${patenteNorm} | legajo ${legajoNorm} | ventana ${VENTANA_HOJAS_DIAS}d`);
+
+    // ── 1. Hojas candidatas en Softland (chofer + tractor, recientes) ──
+    // No se filtra por CERRAD acá: una hoja que administración cerró mientras
+    // el chofer todavía tenía gastos pendientes también tiene que poder verse.
+    const query = `
+      SELECT
+        h.USR_GTVIAH_NROVIA AS NroViaje,
+        h.USR_GTVIAH_CODEMP AS CodEmpresa,
+        h.USR_GTVIAH_NROLEG AS LegajoHR,
+        h.USR_GTVIAH_EMPLEG AS EmpresaLegajoHR,
+        h.USR_GTVIAH_CERRAD AS Cerrado,
+        h.USR_GTVIAH_FSALID AS FechaSalida,
+        h.USR_GTVIAH_FLLEGA AS FechaLlegada,
+        h.USR_GTVIAH_CHOFER AS ChoferHR,
+        h.USR_GTVIAH_PATTRA AS PatenteHR,
+        h.USR_GTVIAH_PATSEM AS PatenteSemi,
+        h.USR_GTVIAH_ORIGEN AS OrigenHR,
+        h.USR_GTVIAH_DESTIN AS DestinoHR,
+        h.USR_GTVIAH_TEXTOS AS Observaciones,
+        h.USR_GTVIAH_LIQUID AS Liquidado,
+        h.USR_GTVIAH_INTTRA AS NumeroInterno
+      FROM USR_GTVIAH h
+      WHERE h.USR_GTVIAH_PATTRA = @patente
+        AND LTRIM(RTRIM(h.USR_GTVIAH_NROLEG)) = @legajo
+        AND h.USR_GTVIAH_ANULAD = 'N'
+        AND h.USR_GT_DEBAJA     = 'N'
+        AND h.USR_GTVIAH_FSALID >= DATEADD(DAY, -${VENTANA_HOJAS_DIAS}, CAST(GETDATE() AS date))
+      ORDER BY h.USR_GTVIAH_NROVIA DESC
+    `;
+
+    const candidatas = await sqlServerService.query(query, {
+      patente: patenteNorm,
+      legajo: legajoNorm,
+    });
+
+    if (candidatas.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        total: 0,
+        message: `El tractor ${patenteNorm} no tiene hojas de ruta recientes asignadas al legajo ${legajoNorm}`,
+      });
+    }
+
+    // ── 2. Gastos cargados y finalizaciones, desde dibiagi_admin_db ──
+    const nros = candidatas.map((c: any) => Number(c.NroViaje)).filter(Number.isFinite);
+    const gastosPorViaje = new Map<number, { cantidad: number; total: number }>();
+    const finalizadas = new Set<number>();
+
+    if (nros.length > 0) {
+      const rq = await adminDb.request();
+      rq.input('legajo', adminSql.NVarChar(64), legajoNorm);
+      const lista = nros.join(',');
+
+      const agg = await rq.query(`
+        SELECT nro_viaje, registro_tipo,
+               COUNT(*) AS cantidad,
+               ISNULL(SUM(importe), 0) AS total
+        FROM dbo.gastos_viaje
+        WHERE nro_viaje IN (${lista})
+          AND LTRIM(RTRIM(legajo_chofer)) = @legajo
+        GROUP BY nro_viaje, registro_tipo
+      `);
+
+      agg.recordset.forEach((r: any) => {
+        if (r.registro_tipo === 'FINALIZACION') {
+          finalizadas.add(Number(r.nro_viaje));
+        } else {
+          gastosPorViaje.set(Number(r.nro_viaje), {
+            cantidad: Number(r.cantidad),
+            total: Number(r.total),
+          });
+        }
+      });
+    }
+
+    // ── 3. Armar el conjunto visible ──
+    // La más reciente ABIERTA es "la actual"; el resto entra solo si tiene
+    // gastos pendientes de finalizar.
+    const actual = candidatas.find((c: any) => c.Cerrado === 'N');
+    const nroActual = actual ? Number(actual.NroViaje) : null;
+
+    const visibles = candidatas.filter((c: any) => {
+      const nro = Number(c.NroViaje);
+      if (finalizadas.has(nro)) return false;              // el chofer ya la cerró
+      if (nro === nroActual) return true;                   // la que está en curso
+      return (gastosPorViaje.get(nro)?.cantidad ?? 0) > 0;  // tiene gastos a medio cargar
+    });
+
+    const data = visibles.map((c: any) => {
+      const nro = Number(c.NroViaje);
+      const g = gastosPorViaje.get(nro);
+      return {
+        // Mismas claves que usa la app para una hoja de ruta
+        Cod_Empresa:           c.CodEmpresa || '',
+        Nro_Viaje:             nro,
+        Fecha_Salida:          c.FechaSalida || '',
+        Fecha_Llegada:         c.FechaLlegada || null,
+        Nombre_Chofer:         c.ChoferHR || '',
+        Patente_Tractor:       c.PatenteHR || patenteNorm,
+        Patente_Semirremolque: c.PatenteSemi || '',
+        Observaciones:         c.Observaciones || '',
+        Estado_Viaje:          c.Cerrado === 'N' ? 'Abierto' : 'Cerrado',
+        // Metadatos para la pantalla del chofer
+        legajoChofer:  (c.LegajoHR || '').trim(),
+        empresaChofer: (c.EmpresaLegajoHR || '').trim(),
+        numeroInterno: c.NumeroInterno || '',
+        gastosCount:   g?.cantidad ?? 0,
+        totalImporte:  g?.total ?? 0,
+        esActual:      nro === nroActual,
+        finalizada:    false,
+      };
+    });
+
+    // Orden pedido: primero las que venía usando, la actual al final.
+    data.sort((a, b) => {
+      if (a.esActual !== b.esActual) return a.esActual ? 1 : -1;
+      return b.Nro_Viaje - a.Nro_Viaje;
+    });
+
+    console.log(
+      `✅ [Hojas Chofer] ${data.length} visible(s) de ${candidatas.length} candidata(s): ` +
+      data.map(d => `${d.Nro_Viaje}${d.esActual ? '(actual)' : ''}:${d.gastosCount}g`).join(' ')
+    );
+
+    res.json({ success: true, data, total: data.length });
+
+  } catch (error: any) {
+    console.error('❌ Error al buscar hojas del chofer:', error);
+
+    if (['ESOCKET', 'ETIMEOUT', 'ELOGIN', 'ECONNCLOSED'].includes(error?.code)) {
+      return res.json({
+        success: true,
+        data: [],
+        total: 0,
+        sqlError: true,
+        message: 'Base de datos no disponible',
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Error al consultar las hojas de ruta',
+      message: error.message,
     });
   }
 });

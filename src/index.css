@@ -138,6 +138,22 @@ body {
     padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
   }
 
+  /*
+   * Contenedor del panel administrativo (/admin).
+   *
+   * La app del chofer es de celular y se queda angosta (section-container).
+   * El panel en cambio se usa en monitor: aprovecha todo el ancho para que
+   * entre más información sin scroll — sobre todo la tabla CORMVI, que suma
+   * más de 2500px de columnas.
+   *
+   * El tope de 1920px evita que en pantallas ultrawide las filas queden
+   * imposibles de seguir con la vista de punta a punta.
+   */
+  .admin-container {
+    @apply w-full mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10;
+    max-width: 1920px;
+  }
+
   /* Status badges */
   .status-open {
     @apply bg-emerald-500/10 text-emerald-400 border border-emerald-500/20;

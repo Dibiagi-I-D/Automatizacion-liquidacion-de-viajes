@@ -4,7 +4,7 @@ import { Pais } from '../types'
 import {
   FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck,
   FaSearch, FaClipboardCheck, FaExclamationTriangle,
-  FaSignOutAlt, FaChevronRight
+  FaSignOutAlt, FaChevronRight, FaTrailer, FaBuilding
 } from 'react-icons/fa'
 
 import { totalesPorMoneda } from '../types'
@@ -140,7 +140,7 @@ export default function AdminControl() {
   return (
     <div className="min-h-screen bg-[#0f1117]">
       <header className="sticky top-0 z-40 bg-[#0f1117]/95 backdrop-blur-xl border-b border-white/[0.06]">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+        <div className="admin-container py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-blue-600/15 flex items-center justify-center">
               <FaClipboardCheck className="text-blue-400" />
@@ -166,7 +166,7 @@ export default function AdminControl() {
         </div>
       </header>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+      <div className="admin-container py-6">
         {error && (
           <div className="mb-5 flex items-center gap-2 p-4 rounded-xl bg-red-500/[0.04] border border-red-500/20">
             <FaExclamationTriangle className="text-red-400 text-sm flex-shrink-0" />
@@ -177,53 +177,60 @@ export default function AdminControl() {
 
         {/* Los importes agregados no van acá: cada rendición muestra su propio
             total por moneda en la tarjeta de abajo, y el detalle está adentro. */}
-        <div className="grid grid-cols-3 gap-3 mb-6">
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Rendiciones</p>
-            <p className="text-2xl font-bold text-white">{hojasConGastos.length}</p>
-            <p className="text-[10px] text-gray-600 mt-0.5">{gastos.length} gastos totales</p>
+        {/*
+          En monitor las métricas y el buscador comparten fila: se ahorran
+          ~110px de alto y entran varias rendiciones más sin scrollear.
+          En celular se apilan como antes.
+        */}
+        <div className="flex flex-col xl:flex-row xl:items-stretch gap-3 mb-5">
+          <div className="grid grid-cols-3 gap-3 xl:flex-shrink-0">
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 xl:px-5 xl:min-w-[150px]">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Rendiciones</p>
+              <p className="text-2xl font-bold text-white tabular-nums">{hojasConGastos.length}</p>
+              <p className="text-[10px] text-gray-600 mt-0.5">{gastos.length} gastos totales</p>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 xl:px-5 xl:min-w-[150px]">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Pendientes</p>
+              <p className="text-2xl font-bold text-amber-400 tabular-nums">{totalPendientes}</p>
+              <p className="text-[10px] text-gray-600 mt-0.5">Requieren revision</p>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 xl:px-5 xl:min-w-[150px]">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Aprobadas</p>
+              <p className="text-2xl font-bold text-emerald-400 tabular-nums">{totalAprobados}</p>
+              <p className="text-[10px] text-gray-600 mt-0.5">de {hojasConGastos.length}</p>
+            </div>
           </div>
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Pendientes</p>
-            <p className="text-2xl font-bold text-amber-400">{totalPendientes}</p>
-            <p className="text-[10px] text-gray-600 mt-0.5">Requieren revision</p>
-          </div>
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Aprobadas</p>
-            <p className="text-2xl font-bold text-emerald-400">{totalAprobados}</p>
-            <p className="text-[10px] text-gray-600 mt-0.5">de {hojasConGastos.length}</p>
-          </div>
-        </div>
 
-        <div className="flex flex-col sm:flex-row gap-3 mb-5">
-          <div className="relative flex-1">
-            <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600 text-sm" />
-            <input
-              type="text"
-              className="w-full bg-white/[0.03] border border-white/[0.06] rounded-xl px-4 py-2.5 pl-9 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500/40 transition-colors"
-              placeholder="Buscar por N viaje, chofer o patente..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-          <div className="flex gap-2">
-            {(['todos', 'pendiente', 'aprobado'] as const).map((estado) => (
-              <button
-                key={estado}
-                onClick={() => setFiltroEstado(estado)}
-                className={`px-4 py-2.5 rounded-xl text-xs font-medium transition-all border ${
-                  filtroEstado === estado
-                    ? estado === 'pendiente'
-                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                      : estado === 'aprobado'
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
-                    : 'bg-white/[0.02] border-white/[0.06] text-gray-500 hover:text-gray-300'
-                }`}
-              >
-                {estado === 'todos' ? 'Todos' : estado === 'pendiente' ? 'Pendientes' : 'Aprobados'}
-              </button>
-            ))}
+          <div className="flex flex-col sm:flex-row gap-3 flex-1 xl:items-center">
+            <div className="relative flex-1">
+              <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600 text-sm" />
+              <input
+                type="text"
+                className="w-full bg-white/[0.03] border border-white/[0.06] rounded-xl px-4 py-2.5 pl-9 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500/40 transition-colors"
+                placeholder="Buscar por N viaje, chofer o patente..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-2">
+              {(['todos', 'pendiente', 'aprobado'] as const).map((estado) => (
+                <button
+                  key={estado}
+                  onClick={() => setFiltroEstado(estado)}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-medium transition-all border whitespace-nowrap ${
+                    filtroEstado === estado
+                      ? estado === 'pendiente'
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                        : estado === 'aprobado'
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                      : 'bg-white/[0.02] border-white/[0.06] text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  {estado === 'todos' ? 'Todos' : estado === 'pendiente' ? 'Pendientes' : 'Aprobados'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -242,7 +249,7 @@ export default function AdminControl() {
             </p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2 xl:space-y-1.5">
             {hojasFiltradas.map((hoja) => {
               const cantGastos   = gastosPorViaje[hoja.Nro_Viaje]?.length || 0
               const totales      = totalesViaje(hoja.Nro_Viaje)
@@ -251,9 +258,9 @@ export default function AdminControl() {
                 <button
                   key={`${hoja.Cod_Empresa}-${hoja.Nro_Viaje}`}
                   onClick={() => navigate(`/admin/viaje/${hoja.Nro_Viaje}`)}
-                  className="w-full bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 hover:bg-white/[0.05] active:scale-[0.99] transition-all text-left group"
+                  className="w-full bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 xl:py-3 xl:px-5 hover:bg-white/[0.05] active:scale-[0.99] transition-all text-left group"
                 >
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-4 xl:gap-6">
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
                       estaAprobado ? 'bg-emerald-600/15' : 'bg-amber-600/15'
                     }`}>
@@ -262,32 +269,56 @@ export default function AdminControl() {
                         : <FaExclamationTriangle className="text-amber-400 text-sm" />
                       }
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="text-sm font-semibold text-white">Viaje {hoja.Nro_Viaje}</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${
+
+                    {/*
+                      En monitor la fila pasa a una sola línea con columnas de
+                      ancho fijo: se lee como tabla y entra más por pantalla.
+                      Debajo de xl se mantiene el apilado de dos renglones.
+                    */}
+                    <div className="flex-1 min-w-0 xl:flex xl:items-center xl:gap-6">
+                      <div className="flex items-center gap-2 mb-1 xl:mb-0 flex-wrap xl:flex-nowrap xl:w-[290px] xl:flex-shrink-0">
+                        <span className="text-sm font-semibold text-white whitespace-nowrap">Viaje {hoja.Nro_Viaje}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium whitespace-nowrap ${
                           estaAprobado ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
                         }`}>
                           {estaAprobado ? 'Aprobado' : 'Pendiente'}
                         </span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${
+                        <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium whitespace-nowrap ${
                           hoja.Estado_Viaje === 'Abierto' ? 'bg-blue-500/10 text-blue-400' : 'bg-gray-500/10 text-gray-400'
                         }`}>
                           {hoja.Estado_Viaje}
                         </span>
                       </div>
-                      <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
-                        <span className="flex items-center gap-1">
-                          <FaUser className="text-[10px]" />{hoja.Nombre_Chofer}
+
+                      <div className="flex items-center gap-4 xl:gap-6 text-xs text-gray-500 flex-wrap xl:flex-nowrap xl:flex-1 xl:min-w-0">
+                        <span className="flex items-center gap-1.5 xl:w-[230px] xl:flex-shrink-0 min-w-0">
+                          <FaUser className="text-[10px] flex-shrink-0" />
+                          <span className="truncate">{hoja.Nombre_Chofer}</span>
                         </span>
-                        <span className="flex items-center gap-1">
-                          <FaTruck className="text-[10px]" />{hoja.Patente_Tractor}
+                        <span className="flex items-center gap-1.5 xl:w-[110px] xl:flex-shrink-0">
+                          <FaTruck className="text-[10px] flex-shrink-0" />{hoja.Patente_Tractor}
                         </span>
-                        <span className="hidden sm:flex items-center gap-1">
-                          <FaCalendarAlt className="text-[10px]" />{formatFecha(hoja.Fecha_Salida)}
+                        {/* Semirremolque: espacio que antes no se usaba */}
+                        {hoja.Patente_Semirremolque && (
+                          <span className="hidden xl:flex items-center gap-1.5 w-[110px] flex-shrink-0">
+                            <FaTrailer className="text-[10px] flex-shrink-0" />{hoja.Patente_Semirremolque}
+                          </span>
+                        )}
+                        <span className="hidden sm:flex items-center gap-1.5 xl:w-[105px] xl:flex-shrink-0">
+                          <FaCalendarAlt className="text-[10px] flex-shrink-0" />{formatFecha(hoja.Fecha_Salida)}
                         </span>
+                        {/* Empresa y observaciones solo en monitor */}
+                        <span className="hidden xl:flex items-center gap-1.5 w-[90px] flex-shrink-0">
+                          <FaBuilding className="text-[10px] flex-shrink-0" />{hoja.Cod_Empresa}
+                        </span>
+                        {hoja.Observaciones && (
+                          <span className="hidden 2xl:block flex-1 min-w-0 truncate text-gray-600" title={hoja.Observaciones}>
+                            {hoja.Observaciones}
+                          </span>
+                        )}
                       </div>
                     </div>
+
                     <div className="text-right flex-shrink-0 min-w-[135px]">
                       <TotalesPorMoneda totales={totales} />
                       <p className="text-[10px] text-gray-500 mt-1">{cantGastos} gasto{cantGastos !== 1 ? 's' : ''}</p>

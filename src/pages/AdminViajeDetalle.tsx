@@ -648,7 +648,7 @@ export default function AdminViajeDetalle() {
 
       {/* Header */}
       <header className="sticky top-0 z-40 bg-[#0f1117]/95 backdrop-blur-xl border-b border-white/[0.06]">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-4">
+        <div className="admin-container py-3 flex items-center gap-4">
           <button
             onClick={() => navigate('/admin')}
             className="w-9 h-9 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] flex items-center justify-center text-gray-400 hover:text-white transition-all border border-white/[0.06]"
@@ -702,7 +702,7 @@ export default function AdminViajeDetalle() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+      <div className="admin-container py-6 space-y-5">
 
         {error && (
           <div className="flex items-center gap-2 p-4 rounded-xl bg-red-500/[0.04] border border-red-500/20">

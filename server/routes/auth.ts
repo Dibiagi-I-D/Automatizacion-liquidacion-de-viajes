@@ -20,6 +20,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'secret-super-seguro-cambiar-en-pro
 const ADMIN_USERS = [
   { usuario: 'admin',    password: 'admin588', nombre: 'Administrador', rol: 'admin'    },
   { usuario: 'veronica', password: 'veronica', nombre: 'Verónica',      rol: 'operador' },
+  { usuario: 'laura',    password: 'laura',    nombre: 'Laura',         rol: 'operador' },
 ]
 
 // POST /api/auth/admin-login
