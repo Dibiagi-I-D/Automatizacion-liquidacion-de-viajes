@@ -54,7 +54,14 @@ export default function AdminControl() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [filtroEstado, setFiltroEstado] = useState<'todos' | 'pendiente' | 'aprobado'>('todos')
+  /**
+   * Dos bandejas excluyentes, sin "Todos".
+   *
+   * Aprobar una rendición la saca de Pendientes y la pasa a Aprobados. Mezclar
+   * ambas en una sola lista hacía que lo ya cerrado tapara lo que falta revisar.
+   * Arranca en Pendientes, que es la cola de trabajo real.
+   */
+  const [filtroEstado, setFiltroEstado] = useState<'pendiente' | 'aprobado'>('pendiente')
 
   const adminData = JSON.parse(sessionStorage.getItem('admin_user') || '{}')
 
@@ -109,8 +116,7 @@ export default function AdminControl() {
         hoja.Nombre_Chofer.toLowerCase().includes(searchQuery.toLowerCase()) ||
         hoja.Patente_Tractor.toLowerCase().includes(searchQuery.toLowerCase())
       const estado = aprobaciones[hoja.Nro_Viaje] ? 'aprobado' : 'pendiente'
-      const matchEstado = filtroEstado === 'todos' || filtroEstado === estado
-      return matchBusqueda && matchEstado
+      return matchBusqueda && filtroEstado === estado
     })
     .sort((a, b) => b.Nro_Viaje - a.Nro_Viaje)
 
@@ -212,22 +218,29 @@ export default function AdminControl() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
+            {/* Dos bandejas excluyentes: lo aprobado sale de Pendientes */}
             <div className="flex gap-2">
-              {(['todos', 'pendiente', 'aprobado'] as const).map((estado) => (
+              {([
+                { valor: 'pendiente', etiqueta: 'Pendientes', cantidad: totalPendientes },
+                { valor: 'aprobado',  etiqueta: 'Aprobados',  cantidad: totalAprobados  },
+              ] as const).map(({ valor, etiqueta, cantidad }) => (
                 <button
-                  key={estado}
-                  onClick={() => setFiltroEstado(estado)}
-                  className={`px-4 py-2.5 rounded-xl text-xs font-medium transition-all border whitespace-nowrap ${
-                    filtroEstado === estado
-                      ? estado === 'pendiente'
+                  key={valor}
+                  onClick={() => setFiltroEstado(valor)}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-medium transition-all border whitespace-nowrap flex items-center gap-2 ${
+                    filtroEstado === valor
+                      ? valor === 'pendiente'
                         ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                        : estado === 'aprobado'
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                          : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                        : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
                       : 'bg-white/[0.02] border-white/[0.06] text-gray-500 hover:text-gray-300'
                   }`}
                 >
-                  {estado === 'todos' ? 'Todos' : estado === 'pendiente' ? 'Pendientes' : 'Aprobados'}
+                  {etiqueta}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded tabular-nums ${
+                    filtroEstado === valor ? 'bg-white/[0.08]' : 'bg-white/[0.04]'
+                  }`}>
+                    {cantidad}
+                  </span>
                 </button>
               ))}
             </div>
@@ -240,12 +253,22 @@ export default function AdminControl() {
               <FaClipboardCheck className="text-2xl text-gray-600" />
             </div>
             <p className="text-base font-medium text-white mb-1">
-              {hojasConGastos.length === 0 ? 'Sin rendiciones' : 'Sin resultados'}
+              {hojasConGastos.length === 0
+                ? 'Sin rendiciones'
+                : searchQuery
+                  ? 'Sin resultados'
+                  : filtroEstado === 'pendiente'
+                    ? 'No hay rendiciones pendientes'
+                    : 'No hay rendiciones aprobadas'}
             </p>
             <p className="text-gray-500 text-sm">
               {hojasConGastos.length === 0
                 ? 'Todavia no hay gastos cargados por los choferes'
-                : 'Proba con otro criterio de busqueda'}
+                : searchQuery
+                  ? 'Proba con otro criterio de busqueda'
+                  : filtroEstado === 'pendiente'
+                    ? 'Todo lo cargado por los choferes ya esta aprobado'
+                    : 'Todavia no aprobaste ninguna rendicion'}
             </p>
           </div>
         ) : (
