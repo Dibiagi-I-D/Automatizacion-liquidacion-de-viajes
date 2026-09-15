@@ -240,6 +240,15 @@ export default function NuevoGasto() {
       return
     }
 
+    // El ticket es obligatorio. Sin esta guarda el gasto se guardaba igual y la
+    // foto se perdía sin aviso — pasó con gastos cargados a mano y, sobre todo,
+    // al tocar la ✕ del panel de escaneo, que descarta la imagen pero deja los
+    // datos ya extraídos en el formulario.
+    if (!ocrPreview) {
+      alert('Sacale una foto al ticket antes de registrar el gasto.')
+      return
+    }
+
     enviando.current = true
     setGuardando(true)
 
@@ -256,13 +265,11 @@ export default function NuevoGasto() {
       )
 
       // Adjuntar la foto del ticket (comprimida) para que quede como respaldo
-      let fotoParaGuardar: string | undefined
-      if (ocrPreview) {
-        try {
-          fotoParaGuardar = await comprimirImagen(ocrPreview)
-        } catch {
-          fotoParaGuardar = ocrPreview
-        }
+      let fotoParaGuardar: string
+      try {
+        fotoParaGuardar = await comprimirImagen(ocrPreview)
+      } catch {
+        fotoParaGuardar = ocrPreview
       }
 
       // Enviar gasto al servidor
@@ -500,25 +507,31 @@ export default function NuevoGasto() {
           </div>
         )}
 
-        {/* Preview de imagen y resultado OCR */}
-        {ocrPreview && showOcrResult && (
+        {/*
+          Se muestra siempre que haya foto, aunque el OCR haya fallado: como el
+          ticket es obligatorio para registrar, el chofer tiene que poder ver si
+          quedó adjunto. Antes dependía de showOcrResult y una lectura fallida
+          dejaba la foto puesta pero invisible.
+        */}
+        {ocrPreview && (
           <div className="mt-3 glass-card p-3">
             <div className="flex items-start justify-between mb-2">
               <p className="text-[11px] font-medium text-emerald-400 uppercase tracking-wider">
-                Resultado del escaneo
+                {showOcrResult ? 'Resultado del escaneo' : 'Ticket adjunto'}
               </p>
               <button
                 type="button"
                 onClick={limpiarOCR}
-                className="text-gray-500 hover:text-gray-300 transition-colors p-1"
+                title="Quitar la foto del ticket"
+                className="text-gray-500 hover:text-red-400 transition-colors p-1"
               >
                 <FaTimes className="text-xs" />
               </button>
             </div>
             <div className="flex gap-3">
-              <img 
-                src={ocrPreview} 
-                alt="Ticket escaneado" 
+              <img
+                src={ocrPreview}
+                alt="Ticket escaneado"
                 className="w-24 h-32 object-cover rounded-lg border border-white/[0.06] flex-shrink-0"
               />
               <div className="flex-1 min-w-0">
@@ -543,9 +556,13 @@ export default function NuevoGasto() {
                       Concepto: {tipoProducto}/{codigoArticulo} — {conceptos.find(c => c.tipoProducto === tipoProducto && c.codigoArticulo === codigoArticulo)?.descripcion || 'Detectado'}
                     </p>
                   )}
-                  <p className={`text-sm font-medium ${formalidad === 'FORMAL' ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    Formalidad: {formalidad}
-                  </p>
+                  {/* Sin lectura exitosa no hay formalidad detectada: mostrar el
+                      valor por defecto haría pasar por dato lo que es un supuesto. */}
+                  {showOcrResult && (
+                    <p className={`text-sm font-medium ${formalidad === 'FORMAL' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      Formalidad: {formalidad}
+                    </p>
+                  )}
                   {codigoProveedor && (
                     <p className="text-sm text-gray-300">
                       Proveedor: {codigoProveedor}
@@ -555,7 +572,9 @@ export default function NuevoGasto() {
               </div>
             </div>
             <p className="text-[10px] text-gray-600 mt-2">
-              Verificá y corregí los datos si es necesario
+              {showOcrResult
+                ? 'Verificá y corregí los datos si es necesario'
+                : 'No se pudieron leer los datos del ticket. La foto queda guardada igual — completá el importe a mano.'}
             </p>
           </div>
         )}
@@ -640,21 +659,30 @@ export default function NuevoGasto() {
           />
         </div>
 
-        {/* Botón submit */}
-        <button
-          type="submit"
-          className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={guardando}
-        >
-          {guardando ? (
-            <>
-              <FaSpinner className="animate-spin mr-2" />
-              Registrando…
-            </>
-          ) : (
-            'Registrar Gasto'
+        {/* Botón submit — sin ticket no se habilita */}
+        <div>
+          <button
+            type="submit"
+            className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={guardando || !ocrPreview}
+          >
+            {guardando ? (
+              <>
+                <FaSpinner className="animate-spin mr-2" />
+                Registrando…
+              </>
+            ) : (
+              'Registrar Gasto'
+            )}
+          </button>
+
+          {!ocrPreview && !guardando && (
+            <p className="mt-2.5 flex items-center justify-center gap-2 text-xs text-amber-400">
+              <FaCamera className="text-[10px]" />
+              Sacale una foto al ticket para poder registrar el gasto
+            </p>
           )}
-        </button>
+        </div>
       </form>
     </div>
   )

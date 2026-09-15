@@ -2,6 +2,12 @@ node_modules
 dist
 .env
 .DS_Store
+
+# Credenciales de service account de Google (Speech-to-Text).
+# Son una clave privada: no se versionan nunca.
+project-*.json
+*service-account*.json
+gcp-credentials.json
 *.log
 coverage
 .vscode

@@ -4,6 +4,8 @@ import HojasDeRuta from './HojasDeRuta'
 import NuevoGasto from './NuevoGasto'
 import Rendicion from './Rendicion'
 import DetalleViaje from './DetalleViaje'
+import Novedades from './Novedades'
+import NuevaNovedad from './NuevaNovedad'
 import BottomNav from '../components/BottomNav'
 import { FaTruck } from 'react-icons/fa'
 
@@ -43,6 +45,8 @@ export default function Dashboard() {
           <Route path="nuevo-gasto" element={<NuevoGasto />} />
           <Route path="rendicion" element={<Rendicion />} />
           <Route path="detalle-viaje" element={<DetalleViaje />} />
+          <Route path="novedades" element={<Novedades />} />
+          <Route path="nueva-novedad" element={<NuevaNovedad />} />
           <Route path="*" element={<Navigate to="hojas-ruta" replace />} />
         </Routes>
       </div>

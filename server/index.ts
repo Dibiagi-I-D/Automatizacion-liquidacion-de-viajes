@@ -8,6 +8,8 @@ import conceptosRoutes from './routes/conceptos.js'
 import softlandRoutes from './routes/softland.js'
 import driversRoutes from './routes/drivers.js'
 import ocrRoutes from './routes/ocr.js'
+import novedadesRoutes from './routes/novedades.js'
+import vozRoutes from './routes/voz.js'
 
 dotenv.config()
 
@@ -36,6 +38,8 @@ app.use('/api/conceptos', conceptosRoutes)
 app.use('/api/softland', softlandRoutes)
 app.use('/api/drivers', driversRoutes)
 app.use('/api/ocr', ocrRoutes)
+app.use('/api/novedades', novedadesRoutes)
+app.use('/api/voz', vozRoutes)
 
 // Health check
 app.get('/health', (req, res) => {

@@ -65,8 +65,17 @@ export default function Login() {
       return
     }
 
+    // Al elegir un chofer se escribe su nombre en el campo, y ese cambio vuelve
+    // a disparar este efecto: el nombre coincide consigo mismo y la lista se
+    // reabría sola, obligando a tocar dos veces. Si lo que hay escrito es
+    // exactamente el chofer ya elegido, no hay nada que buscar.
+    if (selectedChofer && searchQuery === selectedChofer.Nombre_Completo) {
+      setShowDropdown(false)
+      return
+    }
+
     const query = searchQuery.toLowerCase()
-    const filtered = choferes.filter(chofer => 
+    const filtered = choferes.filter(chofer =>
       chofer.Nombre_Completo.toLowerCase().includes(query) ||
       chofer.Legajo.includes(searchQuery) ||
       chofer.Documento.includes(searchQuery)
@@ -74,7 +83,7 @@ export default function Login() {
 
     setFilteredChoferes(filtered)
     setShowDropdown(filtered.length > 0)
-  }, [searchQuery, choferes])
+  }, [searchQuery, choferes, selectedChofer])
 
   // Filtrar tractores cuando cambia el texto de búsqueda
   useEffect(() => {

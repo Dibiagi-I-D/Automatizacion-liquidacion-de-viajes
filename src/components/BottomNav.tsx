@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { FaMapMarkedAlt, FaFileAlt, FaSignOutAlt } from 'react-icons/fa'
+import { FaMapMarkedAlt, FaFileAlt, FaSignOutAlt, FaClipboardList, FaHistory } from 'react-icons/fa'
 import { useAuth } from '../context/AuthContext'
 
 export default function BottomNav() {
@@ -30,6 +30,22 @@ export default function BottomNav() {
         >
           <FaFileAlt className="text-lg mb-0.5" />
           <span className="text-[10px] font-medium tracking-wide">Rendición</span>
+        </NavLink>
+
+        <NavLink
+          to="/dashboard/nueva-novedad"
+          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+        >
+          <FaClipboardList className="text-lg mb-0.5" />
+          <span className="text-[10px] font-medium tracking-wide">Novedades</span>
+        </NavLink>
+
+        <NavLink
+          to="/dashboard/novedades"
+          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+        >
+          <FaHistory className="text-lg mb-0.5" />
+          <span className="text-[10px] font-medium tracking-wide">Historial</span>
         </NavLink>
 
         <button
