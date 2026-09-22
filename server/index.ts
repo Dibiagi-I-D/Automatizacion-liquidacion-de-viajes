@@ -10,6 +10,7 @@ import driversRoutes from './routes/drivers.js'
 import ocrRoutes from './routes/ocr.js'
 import novedadesRoutes from './routes/novedades.js'
 import vozRoutes from './routes/voz.js'
+import proveedoresRoutes from './routes/proveedores.js'
 
 dotenv.config()
 
@@ -40,6 +41,7 @@ app.use('/api/drivers', driversRoutes)
 app.use('/api/ocr', ocrRoutes)
 app.use('/api/novedades', novedadesRoutes)
 app.use('/api/voz', vozRoutes)
+app.use('/api/proveedores', proveedoresRoutes)
 
 // Health check
 app.get('/health', (req, res) => {

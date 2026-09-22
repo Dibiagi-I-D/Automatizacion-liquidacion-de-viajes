@@ -50,6 +50,33 @@ export function requiereRolAdmin(req: Request, res: Response, next: NextFunction
   }
 }
 
+/**
+ * Exige una sesión del panel administrativo, sea 'admin' u 'operador'.
+ * Para lecturas que cualquiera del panel necesita pero que no tienen por qué
+ * quedar abiertas a internet.
+ */
+export function requiereSesionAdmin(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers['authorization']
+  const token = authHeader && authHeader.split(' ')[1]
+
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'Necesitás iniciar sesión en el panel' })
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { usuario: string; nombre: string; rol: string }
+
+    if (decoded.rol !== 'admin' && decoded.rol !== 'operador') {
+      return res.status(403).json({ success: false, error: 'Esta sesión no es del panel administrativo' })
+    }
+
+    ;(req as AdminRequest).admin = decoded
+    next()
+  } catch {
+    return res.status(403).json({ success: false, error: 'Sesión inválida o vencida. Volvé a entrar.' })
+  }
+}
+
 export function authenticateToken(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers['authorization']
   const token = authHeader && authHeader.split(' ')[1] // Bearer TOKEN

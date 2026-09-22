@@ -26,6 +26,7 @@ export default function NuevoGasto() {
   const [codigoArticulo, setCodigoArticulo] = useState('')
   const [formalidad, setFormalidad] = useState<'FORMAL' | 'INFORMAL'>('INFORMAL')
   const [codigoProveedor, setCodigoProveedor] = useState('')
+  const [nombreProveedor, setNombreProveedor] = useState('')
   const [importe, setImporte] = useState('')
   const [descripcion, setDescripcion] = useState('')
   // Guardado: mientras dura, un cartel tapa la pantalla para que no se pueda
@@ -175,11 +176,10 @@ export default function NuevoGasto() {
       setFormalidad(form)
       console.log('Formalidad:', form)
 
-      // Proveedor (el OCR puede devolver un nombre; lo guardamos como texto libre)
-      if (data.datos?.proveedor) {
-        setCodigoProveedor(data.datos.proveedor)
-        console.log('Proveedor:', data.datos.proveedor)
-      }
+      // Proveedor: se guarda el número de cuenta de Softland, que es lo que va a
+      // CORMVI_NROCTA. Vacío si el OCR no lo pudo identificar: lo asigna administración.
+      setCodigoProveedor(data.datos?.codigoProveedor || '')
+      setNombreProveedor(data.datos?.proveedor || '')
 
       setShowOcrResult(true)
 
@@ -310,6 +310,7 @@ export default function NuevoGasto() {
       setCodigoArticulo('')
       setFormalidad('INFORMAL')
       setCodigoProveedor('')
+      setNombreProveedor('')
       // Limpiar la foto: si no, el próximo gasto se guardaría con el ticket anterior
       limpiarOCR()
 
@@ -563,9 +564,9 @@ export default function NuevoGasto() {
                       Formalidad: {formalidad}
                     </p>
                   )}
-                  {codigoProveedor && (
+                  {nombreProveedor && (
                     <p className="text-sm text-gray-300">
-                      Proveedor: {codigoProveedor}
+                      Proveedor: {nombreProveedor}
                     </p>
                   )}
                 </div>

@@ -8,7 +8,7 @@ import {
 } from 'react-icons/fa'
 
 import { totalesPorMoneda, normalizarPais, MONEDAS, MONEDAS_SOFTLAND, BANDERAS } from '../types'
-import { resolverProveedor } from '../proveedores'
+import { resolverProveedor, cargarProveedores } from '../proveedores'
 import TotalesPorMoneda from '../components/TotalesPorMoneda'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
@@ -285,6 +285,10 @@ export default function AdminViajeDetalle() {
   // Visor de la foto del ticket
   const [fotoAmpliada, setFotoAmpliada] = useState<{ url: string; titulo: string } | null>(null)
 
+  // Padrón de proveedores de Softland. Al pasar a 'listo' la tabla se vuelve a
+  // dibujar y cada número muestra su razón social real.
+  const [padron, setPadron] = useState<'cargando' | 'listo' | 'error'>('cargando')
+
   const adminData = JSON.parse(sessionStorage.getItem('admin_user') || '{}')
   // Solo el rol 'admin' elimina gastos. El backend lo vuelve a validar contra
   // el JWT, así que esconder el botón es comodidad, no la restricción real.
@@ -298,6 +302,12 @@ export default function AdminViajeDetalle() {
   )
 
   useEffect(() => { cargarDatos() }, [nroViaje])
+
+  useEffect(() => {
+    cargarProveedores(sessionStorage.getItem('admin_token') || '')
+      .then(() => setPadron('listo'))
+      .catch(() => setPadron('error'))
+  }, [])
 
   /** Convierte un gasto registrado localmente al formato GastoAPI para unificarlo en la tabla */
   const localGastoToAPI = (g: any): GastoAPI => {
@@ -711,6 +721,16 @@ export default function AdminViajeDetalle() {
           </div>
         )}
 
+        {/* Sin padrón no hay forma de saber si un número de proveedor es válido */}
+        {padron === 'error' && (
+          <div className="flex items-center gap-2 p-4 rounded-xl bg-amber-500/[0.04] border border-amber-500/20">
+            <FaExclamationTriangle className="text-amber-400 text-sm flex-shrink-0" />
+            <p className="text-sm text-amber-400">
+              No se pudo cargar el padrón de proveedores de Softland. Los números se muestran sin verificar.
+            </p>
+          </div>
+        )}
+
         {/* Info del viaje */}
         {hoja && (
           <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
@@ -931,22 +951,8 @@ export default function AdminViajeDetalle() {
                           {...celda('codigoProveedor')}
                           valor={reg.CORMVI_NROCTA}
                           className="text-gray-200"
-                          render={(v) => {
-                            const p = resolverProveedor(v)
-                            if (!p.codigo && !p.nombre) return <span className="text-gray-700">—</span>
-                            return (
-                              <span className="block leading-tight">
-                                <span className={`font-semibold ${p.codigo ? 'text-gray-100' : 'text-amber-400'}`}>
-                                  {p.codigo || 'sin código'}
-                                </span>
-                                {p.nombre && (
-                                  <span className="block text-[10px] text-gray-500 font-sans mt-0.5">
-                                    {p.nombre}
-                                  </span>
-                                )}
-                              </span>
-                            )
-                          }}
+                          render={(v) => <ProveedorInfo valor={v} />}
+                          ayuda={(borrador) => <ProveedorInfo valor={borrador} compacto />}
                         />
                         <Celda {...celda('tipoProducto')}    valor={reg.CORMVI_TIPORI} className="text-blue-400 font-bold" />
                         <Celda {...celda('codigoArticulo')}  valor={reg.CORMVI_ARTORI} className="text-blue-300 font-semibold" />
@@ -1198,7 +1204,10 @@ export default function AdminViajeDetalle() {
                       <option value="FORMAL">FORMAL</option>
                     </select>
                   </div>
-                  <Campo label="Proveedor (código)" value={form.codigoProveedor} onChange={(v) => setCampo('codigoProveedor', v)} placeholder="999999" />
+                  <div>
+                    <Campo label="Proveedor (código)" value={form.codigoProveedor} onChange={(v) => setCampo('codigoProveedor', v)} placeholder="03" />
+                    <div className="mt-1"><ProveedorInfo valor={form.codigoProveedor} compacto /></div>
+                  </div>
                   <Campo label="Rendición" value={form.rendicion} onChange={(v) => setCampo('rendicion', v)} placeholder="0001-00001234" />
                   <Campo label="Fecha salida" type="date" value={form.fecha} onChange={(v) => setCampo('fecha', v)} />
                 </div>
@@ -1278,13 +1287,15 @@ interface PropsCelda {
   valorEdicion?: any
   /** Cómo se pinta el valor cuando NO se está editando */
   render?: (v: any) => React.ReactNode
+  /** Qué se muestra debajo del input MIENTRAS se escribe */
+  ayuda?: (borrador: string) => React.ReactNode
   className?: string
   alinear?: 'left' | 'right'
 }
 
 function Celda({
   valor, campo, gastoId, guardando, onGuardar,
-  tipo = 'text', opciones, valorEdicion, render,
+  tipo = 'text', opciones, valorEdicion, render, ayuda,
   className = '', alinear = 'left',
 }: PropsCelda) {
   const [editando, setEditando] = useState(false)
@@ -1351,6 +1362,7 @@ function Celda({
             className={`w-full min-w-[80px] bg-[#0b0d13] border border-blue-500/60 rounded px-2 py-1.5 text-xs text-white focus:outline-none ${alineacion}`}
           />
         )}
+        {ayuda && <div className="mt-1">{ayuda(borrador)}</div>}
       </td>
     )
   }
@@ -1402,5 +1414,53 @@ function Campo({
         className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-white placeholder:text-gray-700 focus:outline-none focus:border-blue-500/50 transition-colors"
       />
     </div>
+  )
+}
+
+/**
+ * Número de proveedor con su razón social según el padrón de Softland.
+ *
+ * `compacto` es la versión de una línea que acompaña al input mientras se
+ * tipea: responde "¿a quién corresponde este número?" antes de guardar.
+ */
+function ProveedorInfo({ valor, compacto = false }: { valor: unknown; compacto?: boolean }) {
+  const p = resolverProveedor(valor)
+  const chico = 'text-[10px] font-sans leading-tight'
+
+  if (compacto) {
+    switch (p.estado) {
+      case 'vacio':       return <span className={`${chico} text-gray-600`}>Escribí el número de proveedor</span>
+      case 'cargando':    return <span className={`${chico} text-gray-600`}>Cargando padrón…</span>
+      case 'ok':          return <span className={`${chico} text-emerald-400`}>{p.nombre}</span>
+      case 'baja':        return <span className={`${chico} text-amber-400`}>{p.nombre} — dado de baja</span>
+      case 'inexistente': return <span className={`${chico} text-red-400`}>No existe en Softland</span>
+      case 'sin-codigo':  return <span className={`${chico} text-amber-400`}>Poné el número, no el nombre</span>
+    }
+  }
+
+  if (p.estado === 'vacio') return <span className="text-gray-700">—</span>
+
+  // Se muestra lo que viaja a Softland arriba y la razón social abajo
+  const numero = p.codigo || 'sin código'
+  const colorNumero =
+    p.estado === 'inexistente' ? 'text-red-400' :
+    p.estado === 'sin-codigo'  ? 'text-amber-400' :
+    'text-gray-100'
+
+  const detalle =
+    p.estado === 'ok'          ? <span className="text-gray-500">{p.nombre}</span> :
+    p.estado === 'baja'        ? <span className="text-amber-400">{p.nombre} · dado de baja</span> :
+    p.estado === 'inexistente' ? <span className="text-red-400">No existe en Softland</span> :
+    p.estado === 'sin-codigo'  ? <span className="text-gray-500">{p.nombre}</span> :
+    null
+
+  return (
+    <span
+      className="block leading-tight"
+      title={p.estado === 'inexistente' ? 'Este número no está en el padrón de proveedores. El alta en Softland lo va a rechazar.' : undefined}
+    >
+      <span className={`font-semibold ${colorNumero}`}>{numero}</span>
+      {detalle && <span className={`block ${chico} mt-0.5 max-w-[220px] truncate`}>{detalle}</span>}
+    </span>
   )
 }

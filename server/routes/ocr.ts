@@ -25,6 +25,128 @@ const CONCEPTOS_VALIDOS = [
 /** Concepto por defecto cuando no hay coincidencia clara: Gastos extras (Caja Camión) */
 const CONCEPTO_FALLBACK = 'TARIFA/14'
 
+interface ProveedorOCR {
+  /** CORMVI_NROCTA tal cual está en PVMPRH: '03', '3' y '00' son proveedores distintos */
+  cta: string
+  nombre: string
+  pais: 'ARG' | 'CHL' | 'URY'
+  /** "Contado sin IVA": el que se usa cuando el ticket no identifica al emisor */
+  generico?: boolean
+  /** Conceptos con los que aparece en las rendiciones reales, del más al menos usado */
+  conceptos: string
+  /** Cómo suele figurar en el ticket, cuando la razón social no alcanza */
+  pista?: string
+}
+
+/**
+ * Proveedores que el OCR puede asignar a CORMVI_NROCTA.
+ *
+ * Sacados de las rendiciones reales (líneas RRFF + CRFF en CORMVI) cruzadas con
+ * el padrón PVMPRH, en septiembre de 2026: son los 33 activos con 5 usos o más,
+ * y cubren el 98,7% de las líneas. Quedan afuera los dados de baja (00, 412) y
+ * los internos que nunca figuran como emisor de un ticket (999999, 542, 3, 0).
+ *
+ * Reemplaza una tabla anterior con los números correctos pero los nombres
+ * inventados: decía que el 177 era un despachante de aduana, y es ISCAMEN.
+ */
+const PROVEEDORES_OCR: ProveedorOCR[] = [
+  { cta: '03',   nombre: 'AR Proveedor Contado Sin IVA "Liq. Viajes"', pais: 'ARG', generico: true, conceptos: 'TARIFA/21, TARIFA/2, HONPRO/6', pista: 'ticket argentino informal, sin CUIT ni razón social identificable' },
+  { cta: '103',  nombre: 'Dirección Nacional de Migraciones', pais: 'ARG', conceptos: 'TARIFA/2', pista: 'DNM, control migratorio, paso fronterizo' },
+  { cta: '404',  nombre: 'Corredores Viales S.A.', pais: 'ARG', conceptos: 'TARIFA/5', pista: 'peaje en ruta nacional' },
+  { cta: '8',    nombre: 'Ente Control de Rutas Provinciales', pais: 'ARG', conceptos: 'TARIFA/5', pista: 'peaje en ruta provincial' },
+  { cta: '13',   nombre: 'Dirección Nacional de Vialidad', pais: 'ARG', conceptos: 'TARIFA/1, TARIFA/3', pista: 'DNV; túnel internacional Cristo Redentor del lado argentino' },
+  { cta: '177',  nombre: 'ISCAMEN - Instituto de Sanidad y Calidad Agropecuaria Mendoza', pais: 'ARG', conceptos: 'TARIFA/10', pista: 'desinfección o barrera sanitaria en Mendoza' },
+  { cta: '142',  nombre: 'Camara de Comercio Exterior de San Juan', pais: 'ARG', conceptos: 'TARIFA/10', pista: 'desinfección en San Juan' },
+  { cta: '155',  nombre: 'Comision Administradora del Río Uruguay', pais: 'ARG', conceptos: 'TARIFA/5', pista: 'CARU, puentes internacionales sobre el río Uruguay' },
+  { cta: '1011', nombre: 'Comuna San Jeronimo Sud', pais: 'ARG', conceptos: 'TARIFA/5' },
+  { cta: '286',  nombre: 'Servicom SRL', pais: 'ARG', conceptos: 'HONPRO/4', pista: 'agente de transporte aduanero' },
+  { cta: '426',  nombre: 'Tunel Subfluvial Raul Uranga - Carlos Sylvestre Begnis', pais: 'ARG', conceptos: 'TARIFA/5', pista: 'túnel subfluvial Paraná - Santa Fe' },
+  { cta: '1607', nombre: 'Yacante Miriam Elizabeth', pais: 'ARG', conceptos: 'HONPRO/6, HONPRO/4' },
+  { cta: '514',  nombre: 'Logistica Internacional S.A.', pais: 'ARG', conceptos: 'HONPRO/4' },
+  { cta: '421',  nombre: 'Unidad Ejecutora Corredor Vial Nº6', pais: 'ARG', conceptos: 'TARIFA/5' },
+  { cta: '411',  nombre: 'Unidad Ejecutora Corredor Vial Nº 9', pais: 'ARG', conceptos: 'TARIFA/5' },
+  { cta: '598',  nombre: 'Caminos de las Sierras S.A', pais: 'ARG', conceptos: 'TARIFA/5' },
+  { cta: '427',  nombre: 'Unidad Ejecutora Autopista AP 01', pais: 'ARG', conceptos: 'TARIFA/5' },
+  { cta: '571',  nombre: 'Servicios Viales de Santa Fe S.A.', pais: 'ARG', conceptos: 'TARIFA/5' },
+  { cta: '156',  nombre: 'Caminos del Rio Uruguay S.A.', pais: 'ARG', conceptos: 'TARIFA/5, TARIFA/6' },
+  { cta: '675',  nombre: 'Autopistas del Sol S.A', pais: 'ARG', conceptos: 'TARIFA/5' },
+  { cta: '1640', nombre: 'Jerez Nayla Daiana', pais: 'ARG', conceptos: 'TARIFA/14, HONPRO/6' },
+
+  { cta: '01',   nombre: 'CH Proveedor Contado Sin IVA "Liq. Viajes"', pais: 'CHL', generico: true, conceptos: 'TARIFA/4, TARIFA/12, TARIFA/14', pista: 'boleta o ticket chileno sin emisor identificable' },
+  { cta: '147',  nombre: 'Ministerio de Obras Públicas Dirección Gral de OO PP DCYF', pais: 'CHL', conceptos: 'TARIFA/4', pista: 'MOP Chile, Dirección de Vialidad' },
+  { cta: '146',  nombre: 'Soc. Concesionaria Autopista Los Libertadores S.A.', pais: 'CHL', conceptos: 'TARIFA/4' },
+  { cta: '409',  nombre: 'Soc Concesionaria Autopista Los Andes S A', pais: 'CHL', conceptos: 'TARIFA/4' },
+  { cta: '145',  nombre: 'Soc. Concesionaria Autopista del Aconcagua S. A.', pais: 'CHL', conceptos: 'TARIFA/4' },
+  { cta: '152',  nombre: 'Ruta del Maipo Sociedad Concesionaria S.A.', pais: 'CHL', conceptos: 'TARIFA/4' },
+  { cta: '515',  nombre: 'Ruta de la Araucania S.A.', pais: 'CHL', conceptos: 'TARIFA/4' },
+  { cta: '521',  nombre: 'Sociedad Concesionaria Autopista San Antonio-Stgo. S.A.', pais: 'CHL', conceptos: 'TARIFA/4' },
+  { cta: '517',  nombre: 'Soc. Concesionaria Ruta 5 Talca Chillan S.A.', pais: 'CHL', conceptos: 'TARIFA/4' },
+  { cta: '573',  nombre: 'Ruta Sur Sociedad Concesionaria', pais: 'CHL', conceptos: 'TARIFA/4' },
+  { cta: '419',  nombre: 'Soc. Concesionaria del Elqui S.A.', pais: 'CHL', conceptos: 'TARIFA/4' },
+
+  { cta: '02',   nombre: 'UY Proveedor s/IVA Liq. de Viajes', pais: 'URY', generico: true, conceptos: 'TARIFA/6, TARIFA/12, TARIFA/14', pista: 'ticket uruguayo sin emisor identificable' },
+]
+
+/**
+ * Valor para "ninguno de la lista". Es preferible a que el modelo adivine: un
+ * número equivocado se exporta sin que nadie lo note, uno vacío el panel lo
+ * marca como "sin código" para que administración lo complete.
+ */
+const SIN_PROVEEDOR = 'NINGUNO'
+
+const CODIGOS_PROVEEDOR = [...PROVEEDORES_OCR.map(p => p.cta), SIN_PROVEEDOR]
+
+const TABLA_PROVEEDORES = PROVEEDORES_OCR
+  .map(p => `${p.cta.padEnd(5)}| ${p.nombre} | ${p.pais} | ${p.conceptos}${p.pista ? ` | ${p.pista}` : ''}`)
+  .join('\n')
+
+// ── Red de seguridad: del nombre del emisor al número ────────────────────
+//
+// Probado con fotos reales de choferes, el modelo LEE bien al emisor pero a
+// veces falla al pasarlo a número: leyó "CORREDORES VIALES S.A." y devolvió el
+// genérico 03 en vez del 404, incluso con temperatura 0 y la regla explícita.
+// Leer es lo que hace bien; mapear un nombre a un número conviene hacerlo acá,
+// de forma determinística.
+
+/** Palabras que no identifican a nadie: tipos societarios y conectores. */
+const PALABRAS_VACIAS = new Set([
+  's', 'a', 'sa', 'srl', 'de', 'del', 'la', 'las', 'los', 'el', 'y', 'n',
+  'soc', 'sociedad', 'anonima', 'concesionaria',
+])
+
+function normalizarTexto(s: string): string {
+  return s
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+/** Los genéricos quedan afuera: su nombre nunca figura impreso en un ticket. */
+const CLAVES_PROVEEDOR = PROVEEDORES_OCR
+  .filter(p => !p.generico)
+  .map(p => ({
+    proveedor: p,
+    claves: normalizarTexto(p.nombre).split(' ').filter(t => t && !PALABRAS_VACIAS.has(t)),
+  }))
+
+/**
+ * Proveedor cuyas palabras clave aparecen TODAS en el texto del emisor.
+ * Exigir todas evita falsos positivos: "Control Fitosanitario San Carlos" no
+ * matchea "Ente Control de Rutas Provinciales" solo por compartir "control".
+ * Si matchean varios, gana el de nombre más específico.
+ */
+function proveedorPorEmisor(texto: string): ProveedorOCR | null {
+  const palabras = new Set(normalizarTexto(texto).split(' '))
+  let mejor: { proveedor: ProveedorOCR; n: number } | null = null
+
+  for (const { proveedor, claves } of CLAVES_PROVEEDOR) {
+    if (claves.length === 0 || !claves.every(t => palabras.has(t))) continue
+    if (!mejor || claves.length > mejor.n) mejor = { proveedor, n: claves.length }
+  }
+  return mejor?.proveedor ?? null
+}
+
 const esperar = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
@@ -106,7 +228,7 @@ Campos a completar:
 - descripcion: nombre del comercio o establecimiento, máximo 120 caracteres.
 - concepto: el par TIPPRO/ARTCOD según la tabla de abajo.
 - formalidad: FORMAL o INFORMAL, según las reglas de abajo.
-- proveedor: razón social del emisor. Si no lo podés identificar con certeza, devolvé "" — no inventes.
+- proveedor: el NÚMERO de proveedor (Cta) de la tabla de proveedores de abajo, o "${SIN_PROVEEDOR}".
 
 CONTEXTO: Estás procesando tickets de gastos de una empresa de transporte de camiones (viajes internacionales ARG/CHL/URY).
 
@@ -147,7 +269,7 @@ REGLAS DE CLASIFICACIÓN (OBLIGATORIAS):
 6. Si es comida, restaurante, almuerzo, cena, viático → TARIFA/12 (Viáticos Chofer).
 7. Si dice "frontera" y son gastos varios en la frontera (no migración ni aduana) → TARIFA/21.
 8. Si dice "aduana", "DGA", "AFIP", "control aduanero" → TARIFA/3.
-9. Si dice "iscamen", "control sanitario" → TARIFA/7.
+9. Si lo emite ISCAMEN o la Cámara de Comercio Exterior de San Juan → TARIFA/10 (es la desinfección en frontera). Otro control sanitario que no sea desinfección → TARIFA/7.
 10. Si dice "neumático", "cubierta", "pinchadura" → NEUMAT/3.
 11. Si dice "urea", "adblue" → COMBLU/3.
 12. Si dice "aceite", "lubricante" → COMBLU/9.
@@ -202,44 +324,27 @@ Guía probabilística por artículo (usar cuando no hay señales claras en el ti
 NUNCA devuelvas "MIXTO" — siempre decidí entre FORMAL o INFORMAL.
 
 REGLAS DE PROVEEDOR:
-Identificá al proveedor/emisor del ticket. La empresa tiene proveedores recurrentes. Usá esta tabla para mapear lo que ves en el ticket al proveedor correcto.
+En Softland el proveedor es un NÚMERO de cuenta. Devolvé el número (columna Cta) del proveedor que emitió el ticket.
+Esta tabla sale de las rendiciones reales de la empresa: la columna "Conceptos" dice con qué artículo se usa cada proveedor.
 
-TABLA COMPLETA DE PROVEEDORES (ordenados por frecuencia de uso):
-Cta | Proveedor                                  | Registros | Categoría Típica | Formalidad | Palabras clave en el ticket
-103 | Dirección Nacional de Migraciones           | 5515      | TARIFA-2         | FORMAL     | migraciones, DNM, entrada, salida, paso fronterizo
-03  | Autopistas del Sol / Ausol                  | 4878      | TARIFA-5         | FORMAL     | autopista del sol, ausol, peaje, autopista
-404 | SENASA - Servicio Desinfección              | 2151      | TARIFA-10        | FORMAL     | senasa, desinfección, fumigación, servicio sanitario
-8   | Red de Peajes Varios                        | 2085      | TARIFA-5         | FORMAL     | peaje, ruta, telepeaje, tag, vialidad
-13  | Túnel Cristo Redentor Concesión             | 1842      | TARIFA-1         | FORMAL     | túnel, cristo redentor, ruta 7, paso los libertadores
-177 | ATA / Despachantes de Aduana                | 1754      | HONPRO-4         | INFORMAL   | ata, agente aduanero, despachante, aduana
-142 | Gestores / Profesionales Varios             | 1307      | HONPRO-6         | INFORMAL   | honorarios, gestor, profesional, trámite
-00  | Proveedores Informales Genéricos            | 176       | TARIFA-14        | INFORMAL   | (sin datos fiscales, tickets sin razón social)
-410 | Concesionaria Peaje Mendoza                 | 150       | TARIFA-5         | FORMAL     | peaje mendoza, ruta mendoza
-210 | Gomerías / Servicios Neumáticos             | 157       | NEUMAT-3         | INFORMAL   | gomería, pinchadura, neumático, cubierta
-305 | Iscamen - Control Fitosanitario             | 41        | TARIFA-7         | INFORMAL   | iscamen, barrera sanitaria, control fitosanitario
-500 | Restaurantes / Comidas en ruta              | 120       | TARIFA-12        | INFORMAL   | restaurante, comedor, parador, almuerzo, cena
-600 | Estacionamientos                            | 5         | TARIFA-13        | INFORMAL   | estacionamiento, parking, cochera
-700 | Docwell / Alquileres                        | 2         | HONPRO-5         | INFORMAL   | docwell, alquiler, predio
-800 | Servicios Aduaneros Varios                  | 1         | HONPRO-3         | INFORMAL   | servicio aduanero, gestión aduanera
+Cta  | Proveedor | País | Conceptos habituales | Cómo figura en el ticket
+${TABLA_PROVEEDORES}
 
-INSTRUCCIONES DE DETECCIÓN DE PROVEEDOR:
-1. Buscá la RAZÓN SOCIAL o NOMBRE COMERCIAL del emisor en el ticket (ej: "AUTOPISTAS DEL SOL S.A.", "YPF S.A.")
-2. Buscá el CUIT del emisor (formato XX-XXXXXXXX-X) y su nombre asociado
-3. Buscá logos, marcas o sellos visibles
-4. RELACIÓN INTELIGENTE: Cruzá la información del proveedor con el artículo clasificado:
-   - Si clasificaste como TARIFA/2 (Migraciones) → el proveedor probablemente es "Dirección Nacional de Migraciones"
-   - Si clasificaste como TARIFA/5 (Peaje ARG) → buscá el nombre de la autopista/concesionaria en el ticket
-   - Si clasificaste como TARIFA/10 (Desinfección) → el proveedor probablemente es "SENASA" o el organismo sanitario
-   - Si clasificaste como TARIFA/1 (Túnel) → el proveedor es "Túnel Cristo Redentor"
-   - Si clasificaste como HONPRO/4 (ATA) → buscá el nombre del despachante/agente aduanero
-   - Si clasificaste como HONPRO/6 (Honorarios) → buscá el nombre del profesional/gestor
-   - Si clasificaste como NEUMAT → buscá el nombre de la gomería
-   - Si clasificaste como TARIFA/12 (Viáticos) → buscá el nombre del restaurante/comercio
-   - Si clasificaste como TARIFA/3 (Aduana) → "Aduana" o "DGA" o la oficina aduanera
-   - Si clasificaste como TARIFA/7 (Iscamen) → "ISCAMEN"
-   - Si clasificaste como TARIFA/11 (Senasa) → "SENASA"
-5. COHERENCIA: El proveedor, el artículo y la formalidad deben ser coherentes entre sí. Ejemplo: si el proveedor es "Dirección Nacional de Migraciones", el artículo debe ser TARIFA/2 y la formalidad FORMAL.
-6. Si no podés identificar al proveedor con certeza, devolvé "" (vacío). NO inventes nombres.
+CÓMO ELEGIR EL PROVEEDOR (en este orden):
+1. Buscá en el ticket la RAZÓN SOCIAL, el CUIT/RUT, logos o sellos del emisor. Si corresponde a un proveedor de la tabla → su número.
+   ESTO MANDA SIEMPRE: si reconocés al emisor, usá su número aunque el ticket esté borroso, gastado o parezca informal.
+   Los genéricos (03, 01, 02) son SOLO para cuando no podés saber a quién se le pagó.
+2. Si NO reconocés al emisor y el ticket es INFORMAL (sin CUIT ni RUT, manuscrito, recibo simple) → el proveedor GENÉRICO de su país:
+   Argentina → 03   ·   Chile → 01   ·   Uruguay → 02
+3. Si es de Chile o Uruguay y no podés identificar al emisor → también el genérico del país (01 o 02). Así se cargan en la práctica.
+4. Si es de Argentina, el ticket es FORMAL y el emisor NO está en la tabla → "${SIN_PROVEEDOR}". Administración lo asigna a mano.
+   No elijas "el más parecido": un número equivocado se contabiliza sin que nadie lo note.
+
+COHERENCIA OBLIGATORIA entre proveedor, concepto y formalidad:
+- Los genéricos (03, 01, 02) son "contado SIN IVA" → la formalidad es INFORMAL.
+- Los demás proveedores de la tabla son organismos o empresas con factura → casi siempre FORMAL.
+- El concepto tiene que ser coherente con la columna "Conceptos habituales" del proveedor elegido.
+  Ejemplos: 103 Migraciones → TARIFA/2. 177 ISCAMEN → TARIFA/10. 13 Vialidad Nacional (túnel) → TARIFA/1. Peajes chilenos → TARIFA/4.
 
 REGLAS DE EXTRACCIÓN:
 - El "importe" debe ser el TOTAL FINAL del ticket (total a pagar, no subtotales ni IVA por separado)
@@ -276,14 +381,16 @@ REGLAS DE EXTRACCIÓN:
           responseMimeType: 'application/json',
           responseSchema: {
             type: 'OBJECT',
-            required: ['importe', 'fecha', 'pais', 'concepto', 'formalidad'],
+            required: ['importe', 'fecha', 'pais', 'concepto', 'formalidad', 'proveedor'],
             properties: {
               importe:     { type: 'NUMBER' },
               fecha:       { type: 'STRING', description: 'YYYY-MM-DD, fecha de emisión' },
               pais:        { type: 'STRING', enum: ['ARG', 'CHL', 'URY'] },
               descripcion: { type: 'STRING' },
               formalidad:  { type: 'STRING', enum: ['FORMAL', 'INFORMAL'] },
-              proveedor:   { type: 'STRING' },
+              // Igual que con el concepto: el modelo solo puede elegir un número
+              // que existe en Softland, nunca inventar uno.
+              proveedor:   { type: 'STRING', enum: CODIGOS_PROVEEDOR },
               // Un solo campo con los 25 pares válidos: así el modelo no puede
               // devolver combinaciones inexistentes como COMBLU/5.
               concepto: {
@@ -332,11 +439,37 @@ REGLAS DE EXTRACCIÓN:
       })
     }
 
-    // "TARIFA/5" → tipoProducto TARIFA, codigoArticulo 5
-    const conceptoRaw = typeof datos.concepto === 'string' && datos.concepto.includes('/')
+    let conceptoRaw: string = typeof datos.concepto === 'string' && datos.concepto.includes('/')
       ? datos.concepto
       : CONCEPTO_FALLBACK
+
+    let proveedor = PROVEEDORES_OCR.find(p => p.cta === datos.proveedor)
+
+    // Solo se corrige cuando el modelo eligió genérico o ninguno pero su propia
+    // lectura del emisor nombra a un proveedor de la tabla. Si ya eligió uno
+    // específico, se respeta: no se le discute una elección concreta.
+    if (!proveedor || proveedor.generico) {
+      const porEmisor = proveedorPorEmisor(String(datos.descripcion || ''))
+      if (porEmisor) {
+        console.log(`[OCR] Proveedor corregido por el emisor leído: ${datos.proveedor} → ${porEmisor.cta} (${porEmisor.nombre})`)
+        proveedor = porEmisor
+
+        // El concepto venía atado al proveedor equivocado por la regla de
+        // coherencia: si no es uno de los habituales del corregido, se toma
+        // su concepto principal (95-99% de los casos reales).
+        const habituales = porEmisor.conceptos.split(',').map(c => c.trim())
+        if (!habituales.includes(conceptoRaw)) conceptoRaw = habituales[0]
+      }
+    }
+
+    // "TARIFA/5" → tipoProducto TARIFA, codigoArticulo 5
     const [tipoProducto, codigoArticulo] = conceptoRaw.split('/')
+
+    // Un genérico es "contado SIN IVA" por definición: no puede ser formal
+    // aunque el modelo lo haya leído así.
+    const formalidad = proveedor?.generico
+      ? 'INFORMAL'
+      : (datos.formalidad === 'FORMAL' || datos.formalidad === 'INFORMAL') ? datos.formalidad : 'INFORMAL'
 
     // Normalizar los datos
     const resultado = {
@@ -346,8 +479,10 @@ REGLAS DE EXTRACCIÓN:
       descripcion: datos.descripcion || '',
       tipoProducto,
       codigoArticulo,
-      formalidad: (datos.formalidad === 'FORMAL' || datos.formalidad === 'INFORMAL') ? datos.formalidad : 'INFORMAL',
-      proveedor: datos.proveedor || '',
+      formalidad,
+      // El número va a CORMVI_NROCTA; el nombre es solo para mostrarlo
+      codigoProveedor: proveedor?.cta || '',
+      proveedor: proveedor?.nombre || '',
     }
 
     console.log('[OCR] Datos extraídos por Gemini:', {
@@ -358,7 +493,7 @@ REGLAS DE EXTRACCIÓN:
       tipoProducto: resultado.tipoProducto,
       codigoArticulo: resultado.codigoArticulo,
       formalidad: resultado.formalidad,
-      proveedor: resultado.proveedor?.substring(0, 50),
+      proveedor: `${resultado.codigoProveedor || '(ninguno)'} ${resultado.proveedor.substring(0, 40)}`,
     })
 
     return res.json({
