@@ -40,21 +40,20 @@ export default function HojasDeRuta() {
   const [viajeActivo, setViajeActivo] = useState<ViajeActivo | null>(null)
   const [modoDeteccion, setModoDeteccion] = useState<'tiempo-real' | 'historial'>('historial')
   const [finalizando, setFinalizando] = useState<number | null>(null)
+  // Hoja que el chofer está por cerrar: abre el paso donde declara qué día llegó
+  const [cerrando, setCerrando] = useState<HojaChofer | null>(null)
 
   /**
    * El chofer da por cerrada una hoja: ya cargó todo lo que tenía.
    * Solo afecta a SU pantalla — no cierra nada en Softland ni toca el panel
    * de administración, donde los gastos siguen visibles y exportables.
+   *
+   * Además declara QUÉ DÍA LLEGÓ. Ese dato antes se reconstruía después, con
+   * la entrada del tractor por portería o con el cierre de la hoja de ruta.
+   * El chofer es el único que lo sabe de primera mano y en el momento, así
+   * que la rendición ya no tiene que esperar a que el camión aparezca acá.
    */
-  const finalizarHoja = async (hoja: HojaChofer) => {
-    const cantidad = hoja.gastosCount ?? gastosCount[hoja.Nro_Viaje] ?? 0
-    const ok = confirm(
-      `¿Finalizar el viaje ${hoja.Nro_Viaje}?\n\n` +
-      `Tenés ${cantidad} gasto${cantidad === 1 ? '' : 's'} cargado${cantidad === 1 ? '' : 's'}.\n` +
-      `Dejará de aparecerte en la lista. Los gastos ya cargados no se borran.`
-    )
-    if (!ok) return
-
+  const finalizarHoja = async (hoja: HojaChofer, fechaLlegada: string) => {
     try {
       setFinalizando(hoja.Nro_Viaje)
       const resp = await fetch(`${API_URL}/gastos-viaje/finalizar/${hoja.Nro_Viaje}`, {
@@ -64,6 +63,7 @@ export default function HojasDeRuta() {
           legajoChofer: (chofer?.legajo || '').trim(),
           chofer: (chofer as any)?.nombreCompleto || '',
           patenteTractor: chofer?.interno || '',
+          fechaLlegada,
         }),
       })
       const data = await resp.json()
@@ -75,6 +75,7 @@ export default function HojasDeRuta() {
 
       // Sale de la lista sin recargar toda la pantalla
       setHojasDeRuta(prev => prev.filter(h => h.Nro_Viaje !== hoja.Nro_Viaje))
+      setCerrando(null)
     } catch (err) {
       console.error('Error al finalizar hoja:', err)
       alert('No hay conexión. La hoja no se finalizó — intentá de nuevo.')
@@ -414,35 +415,128 @@ export default function HojasDeRuta() {
                 </button>
 
                 {/*
-                  Finalizar: el chofer avisa que ya no le queda nada por cargar
-                  en esta hoja y deja de verla. Solo se ofrece cuando hay más de
-                  una hoja en pantalla — si es la única, no tiene sentido.
+                  Terminar el viaje: el chofer avisa que ya no le queda nada
+                  por cargar y declara qué día llegó. Está SIEMPRE, tenga una
+                  hoja o varias: antes aparecía solo con más de una, y el que
+                  hace un viaje por vez nunca podía cerrar ninguno.
                 */}
-                {hayVarias && (
-                  <button
-                    className="w-full text-xs py-2.5 rounded-lg border border-red-500/30 bg-red-500/[0.06] text-red-400 font-medium hover:bg-red-500/15 hover:border-red-500/50 hover:text-red-300 active:bg-red-500/20 transition disabled:opacity-50 disabled:hover:bg-red-500/[0.06]"
-                    onClick={() => finalizarHoja(hoja)}
-                    disabled={finalizando === hoja.Nro_Viaje}
-                  >
-                    {finalizando === hoja.Nro_Viaje ? (
-                      <>
-                        <FaSpinner className="inline animate-spin mr-2 text-[10px]" />
-                        Finalizando...
-                      </>
-                    ) : (
-                      <>
-                        <FaCheckCircle className="inline mr-2 text-[10px]" />
-                        Ya cargué todo — finalizar viaje {hoja.Nro_Viaje}
-                      </>
-                    )}
-                  </button>
-                )}
+                <button
+                  className="w-full text-xs py-2.5 rounded-lg border border-red-500/30 bg-red-500/[0.06] text-red-400 font-medium hover:bg-red-500/15 hover:border-red-500/50 hover:text-red-300 active:bg-red-500/20 transition disabled:opacity-50 disabled:hover:bg-red-500/[0.06]"
+                  onClick={() => setCerrando(hoja)}
+                  disabled={finalizando === hoja.Nro_Viaje}
+                >
+                  {finalizando === hoja.Nro_Viaje ? (
+                    <>
+                      <FaSpinner className="inline animate-spin mr-2 text-[10px]" />
+                      Finalizando...
+                    </>
+                  ) : (
+                    <>
+                      <FaCheckCircle className="inline mr-2 text-[10px]" />
+                      Terminé el viaje {hoja.Nro_Viaje}
+                    </>
+                  )}
+                </button>
               </div>
             </div>
             )
           })}
         </div>
       )}
+
+      {cerrando && (
+        <CerrarViaje
+          hoja={cerrando}
+          gastos={cerrando.gastosCount ?? gastosCount[cerrando.Nro_Viaje] ?? 0}
+          guardando={finalizando === cerrando.Nro_Viaje}
+          onCancelar={() => setCerrando(null)}
+          onConfirmar={(fecha) => finalizarHoja(cerrando, fecha)}
+        />
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   TERMINAR EL VIAJE — el chofer declara qué día llegó
+
+   Es el dato que arranca la rendición: de acá sale la fecha de llegada
+   y, con ella, el período a liquidar. Por eso se pregunta en vez de
+   suponer el día del click: el chofer puede volver el viernes y cerrar
+   la hoja el lunes, y esos tres días moverían el período de liquidación.
+   ══════════════════════════════════════════════════════════════════ */
+
+function CerrarViaje({
+  hoja, gastos, guardando, onCancelar, onConfirmar,
+}: {
+  hoja: HojaChofer
+  gastos: number
+  guardando: boolean
+  onCancelar: () => void
+  onConfirmar: (fecha: string) => void
+}) {
+  const hoy = new Date().toISOString().slice(0, 10)
+  const salida = (hoja.Fecha_Salida || '').slice(0, 10)
+  const [fecha, setFecha] = useState(hoy)
+
+  // Las mismas dos reglas que aplicaría Softland, acá en el celular
+  const error =
+    fecha > hoy ? 'No podés poner una fecha futura.'
+    : salida && fecha < salida ? `El viaje salió el ${salida.split('-').reverse().join('/')}.`
+    : ''
+
+  const dias = salida ? Math.round((Date.parse(fecha) - Date.parse(salida)) / 86400000) : null
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm"
+         onClick={onCancelar}>
+      <div className="bg-[#161821] border border-white/[0.08] rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm p-5"
+           onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-base font-semibold text-white mb-1">
+          Terminé el viaje {hoja.Nro_Viaje}
+        </h3>
+        <p className="text-xs text-gray-500 mb-4">
+          Tenés {gastos} gasto{gastos === 1 ? '' : 's'} cargado{gastos === 1 ? '' : 's'}.
+          Después de confirmar deja de aparecerte en la lista.
+        </p>
+
+        <label className="block text-xs text-gray-400 mb-1.5">¿Qué día llegaste?</label>
+        <input
+          type="date"
+          value={fecha}
+          max={hoy}
+          min={salida || undefined}
+          onChange={(e) => setFecha(e.target.value)}
+          className="w-full bg-white/[0.04] border border-white/[0.1] rounded-lg px-3 py-2.5 text-base text-white focus:outline-none focus:border-blue-500/60"
+        />
+
+        {error
+          ? <p className="text-[11px] text-red-400 mt-2">{error}</p>
+          : dias !== null && (
+              <p className="text-[11px] text-gray-600 mt-2">
+                {dias === 0 ? 'Mismo día de la salida.' : `${dias} día${dias === 1 ? '' : 's'} de viaje.`}
+              </p>
+            )}
+
+        <div className="flex gap-2 mt-5">
+          <button
+            onClick={onCancelar}
+            disabled={guardando}
+            className="flex-1 py-2.5 rounded-lg text-sm text-gray-400 bg-white/[0.04] border border-white/[0.08] disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={() => onConfirmar(fecha)}
+            disabled={guardando || !!error}
+            className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-emerald-600 text-white disabled:opacity-50"
+          >
+            {guardando
+              ? <><FaSpinner className="inline animate-spin mr-2 text-[10px]" /> Cerrando…</>
+              : 'Confirmar'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

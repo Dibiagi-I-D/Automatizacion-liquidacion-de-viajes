@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express'
 import axios from 'axios'
+import { PARES_VALIDOS, CONCEPTO_FALLBACK } from '../services/conceptosSoftland.js'
 
 const router = Router()
 
@@ -8,22 +9,14 @@ const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/
 
 /**
  * Pares TIPPRO/ARTCOD válidos para rendición (formulario RRFF).
- * Se usan como enum del responseSchema: el modelo solo puede elegir uno de estos,
- * así que una clasificación inexistente deja de ser posible.
- * Debe mantenerse sincronizado con CONCEPTOS_ACTIVOS de server/routes/conceptos.ts.
+ * Se usan como enum del responseSchema: el modelo solo puede elegir uno de
+ * estos, así que una clasificación inexistente deja de ser posible.
+ *
+ * Salen del diccionario maestro (services/conceptosSoftland.ts). Antes había
+ * acá una copia con una nota de "mantener sincronizado", que es justamente lo
+ * que no se puede garantizar a mano.
  */
-const CONCEPTOS_VALIDOS = [
-  'TARIFA/1',  'TARIFA/2',  'TARIFA/3',  'TARIFA/4',  'TARIFA/5',
-  'TARIFA/6',  'TARIFA/7',  'TARIFA/8',  'TARIFA/10', 'TARIFA/11',
-  'TARIFA/12', 'TARIFA/13', 'TARIFA/14', 'TARIFA/21',
-  'HONPRO/2',  'HONPRO/3',  'HONPRO/4',  'HONPRO/5',  'HONPRO/6',
-  'NEUMAT/1',  'NEUMAT/2',  'NEUMAT/3',
-  'COMBLU/3',  'COMBLU/9',
-  'SERVIC/3',
-] as const
-
-/** Concepto por defecto cuando no hay coincidencia clara: Gastos extras (Caja Camión) */
-const CONCEPTO_FALLBACK = 'TARIFA/14'
+const CONCEPTOS_VALIDOS = PARES_VALIDOS
 
 interface ProveedorOCR {
   /** CORMVI_NROCTA tal cual está en PVMPRH: '03', '3' y '00' son proveedores distintos */

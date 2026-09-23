@@ -175,8 +175,27 @@ class AdminDbService {
           ON dbo.gastos_viaje (registro_tipo, nro_viaje);
     `)
 
+    // ── Migración 004: cabecera del viaje ────────────────────────────
+    // El equivalente a CORMVH: datos que son del viaje y no de cada gasto.
+    // Solo guarda lo que administración CORRIGE; un NULL significa "usar el
+    // valor calculado" (salida de la hoja, llegada de portería, período por
+    // la fórmula de Softland).
+    await pool.request().batch(`
+      IF OBJECT_ID('dbo.cabecera_viaje', 'U') IS NULL
+      BEGIN
+        CREATE TABLE dbo.cabecera_viaje (
+          nro_viaje         INT            NOT NULL CONSTRAINT PK_cabecera_viaje PRIMARY KEY,
+          fecha_salida      DATE           NULL,
+          fecha_llegada     DATE           NULL,
+          periodo_liquidar  NVARCHAR(6)    NULL,
+          actualizado_por   NVARCHAR(100)  NULL,
+          updated_at        DATETIME2(3)   NOT NULL CONSTRAINT DF_cv_updated DEFAULT (SYSUTCDATETIME())
+        );
+      END
+    `)
+
     this.schemaReady = true
-    console.log('✅ [AdminDB] Esquema verificado (gastos_viaje, aprobaciones_viaje, foto, registro_tipo)')
+    console.log('✅ [AdminDB] Esquema verificado (gastos_viaje, aprobaciones_viaje, foto, registro_tipo, cabecera_viaje)')
   }
 
   /** Request listo para usar, con el esquema ya garantizado. */

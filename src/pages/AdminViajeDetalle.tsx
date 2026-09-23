@@ -1,13 +1,13 @@
-﻿import { useState, useEffect, useMemo, useRef } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  FaTruck, FaSpinner, FaUser, FaCalendarAlt, FaCheck,
+  FaTruck, FaSpinner, FaUser, FaCheck,
   FaArrowLeft, FaClipboardCheck, FaExclamationTriangle,
   FaFileExport, FaTrailer, FaHashtag, FaBuilding, FaDownload,
-  FaTimes, FaPen, FaSave, FaCopy, FaTrash
+  FaTimes, FaPen, FaSave, FaCopy, FaTrash, FaUndo, FaCalendarAlt
 } from 'react-icons/fa'
 
-import { totalesPorMoneda, normalizarPais, MONEDAS, MONEDAS_SOFTLAND, BANDERAS } from '../types'
+import { totalesPorMoneda, normalizarPais, MONEDAS, BANDERAS } from '../types'
 import { resolverProveedor, cargarProveedores } from '../proveedores'
 import TotalesPorMoneda from '../components/TotalesPorMoneda'
 
@@ -25,40 +25,49 @@ interface HojaDeRuta {
   Estado_Viaje: string
 }
 
-// Interfaz que refleja la respuesta real de: GET /trips/v1/expenses-step1
-// Campos documentados + campos técnicos que devuelve la API
-interface GastoAPI {
-  // ── Campos documentados ──────────────────────────────────────
-  Codigo_Formulario:  string         // Siempre 'RRFF'
-  Numero_Formulario:  string         // RENDICION  (ej: '0001-00001234')
-  Nombre_Proveedor:   string         // Nombre del proveedor (display)
-  Descripcion_Gasto:  string         // Descripción del gasto
-  Cantidad:           number         // CANTIDAD del movimiento
-  Precio_Unitario:    number         // PRECIO unitario
-  Nombre_Chofer:      string         // NOMBRE EMPLEADO
-  Numero_Viaje:       string | number // HOJA DE VIAJE N
-  Patente_Tractor:    string         // TRACTOR
-  // ── Campos técnicos (columnas Softland/CORMVI) ───────────────
-  Proveedor:          string         // PROVEEDOR — código numérico (ej: 999999)
-  Tipo_Producto:      string         // TIPO DE PRODUCTO ORIGINAL (TARIFA, etc.)
-  Codigo_Articulo:    string         // CODIGO PRODUCTO ORIGINAL (10, 21, etc.)
-  Informal:           string         // INFORMAL: 'S' / 'N'
-  Periodo_Liquidacion: string        // PERIODO A LIQUIDAR (YYYYMM)
-  Empresa_Legajo:     string         // EMPRESA LEGAJO
-  Legajo:             string         // LEGAJO del chofer
-  Fecha_Salida:       string | null  // FECHA SALIDA del viaje
-  Coeficiente_Viaje:  number | null  // COEF. VIAJE SEGUN FECHA SALIDA
-  Valor_Item:         number         // VALOR DE ITEM SELECCIONADO
-  Valor_Caja_Camion:  number | null  // VALOR DE LA CAJA CAMION
-  Cantidad_CORMVI:    number         // CANTIDAD CORMVI: 1 en los RRFF reales
-  // ── Sólo para gastos guardados en dibiagi_admin_db ────────────
-  _localId?:          string         // id en dbo.gastos_viaje → habilita la edición
-  _tieneFoto?:        boolean        // hay imagen del ticket adjunta
-  // País del gasto: define la moneda del importe (ARS / CLP / UYU).
-  // Los gastos que vienen de la API de portería no lo declaran, así que
-  // normalizarPais() los toma como ARG.
-  Pais?:              string
-  [key: string]:      any            // otros campos técnicos adicionales
+/** De dónde salió cada dato de la cabecera. */
+type OrigenCabecera = 'chofer' | 'hoja' | 'porteria' | 'calculado' | 'manual' | 'sin-dato'
+
+interface ValorCabecera {
+  valor: string | null
+  origen: OrigenCabecera
+}
+
+/**
+ * Cabecera del viaje (el equivalente a CORMVH). La calcula el backend igual
+ * que Softland: salida de la hoja de ruta, llegada de portería, período con
+ * la misma función. Todas las líneas del viaje heredan estos valores.
+ */
+interface Cabecera {
+  nroViaje: number
+  empresa: string
+  patente: string
+  /**
+   * Chofer resuelto contra el padrón USR_GTCHOF. No se muestra: de acá salen
+   * el legajo y la empresa que van en cada línea, y la validación de la regla 16.
+   */
+  chofer: { nombre: string; legajo: string; empresa: string; enPadron: boolean }
+  /** Las tres fuentes de la llegada, para contrastarlas */
+  llegadaCandidatas: { chofer: string | null; hoja: string | null; porteria: string | null }
+  salida: ValorCabecera
+  llegada: ValorCabecera
+  periodoLiquidar: ValorCabecera
+  periodo: number
+  cajaCamion: number | null
+  actualizadoPor: string | null
+  actualizadoAt: string | null
+}
+
+/**
+ * Un problema encontrado por las reglas de Softland (GRTQVI, contexto CORMVH).
+ * `mensaje` es el texto textual del ERP; `comoSeArregla` es agregado nuestro.
+ */
+interface Hallazgo {
+  regla: number
+  nivel: 'bloquea' | 'aviso'
+  mensaje: string
+  comoSeArregla?: string
+  gastoId?: string
 }
 
 interface Aprobacion {
@@ -100,6 +109,19 @@ interface CormviRecord {
   CORMVI_CANTID: number        // Cantidad. En RRFF real siempre 1 (o 0), nunca negativa
   USR_CORMVI_PERIOD: number    // Período (numérico, YYYYMM)
   USR_CORMVI_FCHLLE: string | null  // Fecha de llegada
+}
+
+/**
+ * Una fila tal como la arma el backend (cormviService.gastoAFilaCormvi).
+ * Los campos con `_` son para el panel: NO se copian ni se exportan.
+ */
+interface FilaCormvi extends CormviRecord {
+  _gastoId: string
+  _tieneFoto: boolean
+  _pais: string
+  _descripcion: string
+  _fechaTicket: string
+  _formalidad: string
 }
 
 /**
@@ -213,46 +235,18 @@ function valorCormviTexto(reg: CormviRecord, campo: keyof CormviRecord): string 
   return String(v).replace(/[\t\r\n]+/g, ' ').trim()
 }
 
-function gastoToCormvi(gasto: GastoAPI, fechaLlegada?: string | null): CormviRecord {
-  // Período de liquidación desde el campo de la API o derivado de Fecha_Salida
-  const periodoLiq = gasto.Periodo_Liquidacion ||
-    (gasto.Fecha_Salida
-      ? (() => { const d = new Date(gasto.Fecha_Salida!); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}` })()
-      : '')
-  const fechaSalida = gasto.Fecha_Salida ?? null
-  return {
-    CORMVI_NROCTA:         gasto.Proveedor || '',          // código numérico del proveedor
-    CORMVI_TIPORI:         gasto.Tipo_Producto || '',
-    CORMVI_ARTORI:         gasto.Codigo_Articulo || '',
-    CORMVI_TIPCPT:         'A',
-    CORMVI_CODCPT:         'S000',
-    // Sale del país del gasto: un peaje chileno no se liquida en pesos argentinos
-    CORMVI_COFLIS:         MONEDAS_SOFTLAND[normalizarPais(gasto.Pais)],
-    USR_CORMVI_NLIIVA:     gasto.Informal === 'S' ? 'S' : 'N',
-    USR_CORMVI_CANTID:     gasto.Cantidad ?? 1,
-    USR_CORMVI_PRECIO:     gasto.Precio_Unitario,
-    VIRT_TOTLIN:           (gasto.Cantidad ?? 1) * gasto.Precio_Unitario,
-    USR_CORMVI_PERLIQ:     periodoLiq,
-    CORMVI_TEXTOS:         gasto.Descripcion_Gasto || '',
-    USR_CORMVI_EMPLEG:     gasto.Empresa_Legajo || '',
-    USR_CORMVI_NROLEG:     gasto.Legajo || '',
-    USR_CORMVI_NROVIA:     Number(gasto.Numero_Viaje) || 0,
-    USR_CORMVI_NROFOR:     gasto.Numero_Formulario || '',
-    USR_CORMVI_PATTRA:     gasto.Patente_Tractor || '',
-    // En los registros reales de Softland esta columna siempre viene en 'N'
-    USR_CORMVI_DELETE:     'N',
-    USR_CORMVI_FCHCAL:     fechaSalida,
-    USR_CORMVI_COSAVI:     gasto.Coeficiente_Viaje ?? null,
-    USR_CORMVI_VAITSE:     gasto.Valor_Item ?? 0,
-    USR_CORMVI_NOMLEG:     gasto.Nombre_Chofer || '',
-    USR_CORMVI_CAJCAM:     gasto.Valor_Caja_Camion ?? null,
-    CORMVI_PRECIO:         gasto.Precio_Unitario,
-    CORMVI_CANTID:         gasto.Cantidad_CORMVI ?? 1,
-    // Mismo período que PERLIQ pero numérico, como está en la tabla real
-    USR_CORMVI_PERIOD:     Number(periodoLiq) || 0,
-    // Fecha de llegada del viaje: sale de la hoja de ruta, no del gasto
-    USR_CORMVI_FCHLLE:     fechaLlegada ?? null,
-  }
+/** Un registro CORMVI sin los campos internos del panel (los `_`). */
+function soloCormvi(f: FilaCormvi): CormviRecord {
+  const reg = {} as Record<string, unknown>
+  for (const col of COLUMNAS_CORMVI) reg[col.campo] = f[col.campo]
+  return reg as unknown as CormviRecord
+}
+
+/** 'AAAA-MM-DD' → 'dd/mm/aaaa' sin pasar por Date (evita el corrimiento de zona horaria). */
+function fechaCorta(v: string | null | undefined): string {
+  if (!v) return ''
+  const [a, m, d] = String(v).slice(0, 10).split('-')
+  return d ? `${d}/${m}/${a}` : String(v)
 }
 
 export default function AdminViajeDetalle() {
@@ -261,7 +255,10 @@ export default function AdminViajeDetalle() {
   const nroViaje = parseInt(nroViajeParam || '0')
 
   const [hoja, setHoja] = useState<HojaDeRuta | null>(null)
-  const [gastos, setGastos] = useState<GastoAPI[]>([])
+  // Filas CORMVI y cabecera tal como las arma el backend (cormviService)
+  const [registros, setRegistros] = useState<FilaCormvi[]>([])
+  const [cabecera, setCabecera] = useState<Cabecera | null>(null)
+  const [validaciones, setValidaciones] = useState<Hallazgo[]>([])
   const [aprobacion, setAprobacion] = useState<Aprobacion | null>(null)
   const [loading, setLoading] = useState(true)
   const [aprobando, setAprobando] = useState(false)
@@ -273,7 +270,7 @@ export default function AdminViajeDetalle() {
   const [borrando, setBorrando] = useState<string | null>(null)
 
   // Edición de gastos guardados en dibiagi_admin_db
-  const [editando, setEditando] = useState<GastoAPI | null>(null)
+  const [editando, setEditando] = useState<FilaCormvi | null>(null)
   const [form, setForm] = useState<Record<string, string>>({})
   const [guardando, setGuardando] = useState(false)
   const [errorEdicion, setErrorEdicion] = useState('')
@@ -295,11 +292,9 @@ export default function AdminViajeDetalle() {
   const puedeEliminar = adminData.rol === 'admin'
   const estaAprobado = !!aprobacion
 
-  // Generar registros CORMVI directamente desde los gastos (sin necesitar aprobación)
-  const registrosCormvi = useMemo<CormviRecord[]>(
-    () => gastos.map(g => gastoToCormvi(g, hoja?.Fecha_Llegada ?? null)),
-    [gastos, hoja]
-  )
+  // Sin los campos internos: esto es lo que se copia y se exporta
+  const registrosCormvi: CormviRecord[] = registros.map(soloCormvi)
+  const token = sessionStorage.getItem('admin_token') || ''
 
   useEffect(() => { cargarDatos() }, [nroViaje])
 
@@ -309,51 +304,24 @@ export default function AdminViajeDetalle() {
       .catch(() => setPadron('error'))
   }, [])
 
-  /** Convierte un gasto registrado localmente al formato GastoAPI para unificarlo en la tabla */
-  const localGastoToAPI = (g: any): GastoAPI => {
-    const fecha = g.fecha ? new Date(g.fecha) : null
-    const periodoLiq = fecha
-      ? `${fecha.getFullYear()}${String(fecha.getMonth() + 1).padStart(2, '0')}`
-      : ''
-    return {
-      Codigo_Formulario:   'LOCAL',
-      Numero_Formulario:   g.rendicion || g.id || '',
-      Nombre_Proveedor:    g.codigoProveedor || '',
-      Descripcion_Gasto:   g.descripcion || g.tipo || '',
-      Cantidad:            g.cantidad ?? 1,
-      Precio_Unitario:     g.importe ?? 0,
-      Nombre_Chofer:       g.chofer || '',
-      Numero_Viaje:        g.nroViaje,
-      Patente_Tractor:     g.patenteTractor || '',
-      Proveedor:           g.codigoProveedor || '',
-      Tipo_Producto:       g.tipoProducto || '',
-      Codigo_Articulo:     g.codigoArticulo || '',
-      Informal:            g.formalidad === 'INFORMAL' ? 'S' : 'N',
-      Periodo_Liquidacion: periodoLiq,
-      Empresa_Legajo:      g.empresaChofer || '',
-      Legajo:              g.legajoChofer || '',
-      Fecha_Salida:        g.fecha || null,
-      Coeficiente_Viaje:   g.coeficienteViaje ?? null,
-      Valor_Item:          g.valorItemSeleccionado ?? g.importe ?? 0,
-      Valor_Caja_Camion:   g.valorCajaCamion ?? null,
-      Cantidad_CORMVI:     g.cantidadCormvi ?? 1,
-      Pais:                g.pais || 'ARG',
-      _localId:            g.id,
-      _tieneFoto:          !!g.tieneFoto,
-    }
-  }
-
-  const cargarDatos = async () => {
+  /**
+   * Trae filas y cabecera ya armadas por el backend. Toda la lógica de
+   * Softland (fechas del viaje, período, caja camión) vive en cormviService:
+   * el panel solo muestra.
+   *
+   * `silencioso` recarga sin el spinner de pantalla completa, para no perder
+   * el scroll de la tabla después de editar una celda.
+   */
+  const cargarDatos = async (silencioso = false) => {
     try {
-      setLoading(true)
+      if (!silencioso) setLoading(true)
       setError('')
 
-      const [resHojas, resLocal, resExterno, resAprob] = await Promise.all([
+      const [resHojas, resCormvi, resAprob] = await Promise.all([
         fetch(`${API_URL}/drivers/roadmaps-public`),
-        // Gastos registrados localmente (en memoria del servidor)
-        fetch(`${API_URL}/gastos-viaje/${nroViaje}`),
-        // Gastos desde la API externa (expenses-step1) — puede no estar disponible aún
-        fetch(`${API_URL}/drivers/expenses-step1?search=${nroViaje}&limit=200`).catch(() => null),
+        fetch(`${API_URL}/gastos-viaje/${nroViaje}/cormvi`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
         fetch(`${API_URL}/gastos-viaje/aprobaciones/todas`),
       ])
 
@@ -365,27 +333,18 @@ export default function AdminViajeDetalle() {
         }
       }
 
-      // Gastos locales → convertir al formato GastoAPI
-      const gastosLocales: GastoAPI[] = []
-      if (resLocal.ok) {
-        const data = await resLocal.json()
-        const locales = data.data || []
-        gastosLocales.push(...locales.map(localGastoToAPI))
-      }
-
-      // Gastos externos (API portería) — solo si respondió OK
-      const gastosExternos: GastoAPI[] = []
-      if (resExterno && resExterno.ok) {
-        const data = await resExterno.json()
-        if (data.success && Array.isArray(data.data)) {
-          gastosExternos.push(...data.data)
+      if (resCormvi.status === 401) {
+        setError('La sesión venció. Volvé a ingresar al panel.')
+      } else {
+        const data = await resCormvi.json().catch(() => ({}))
+        if (!resCormvi.ok || !data.success) {
+          setError(data.error || `No se pudieron cargar los registros (${resCormvi.status})`)
+        } else {
+          setRegistros(data.data.registros || [])
+          setCabecera(data.data.cabecera || null)
+          setValidaciones(data.data.validaciones || [])
         }
       }
-
-      // Mergear: externos primero, luego locales (evitar duplicados por Numero_Formulario)
-      const formulariosSeen = new Set(gastosExternos.map(g => g.Numero_Formulario).filter(Boolean))
-      const localesSinDuplicar = gastosLocales.filter(g => !formulariosSeen.has(g.Numero_Formulario))
-      setGastos([...gastosExternos, ...localesSinDuplicar])
 
       if (resAprob.ok) {
         const data = await resAprob.json()
@@ -394,16 +353,34 @@ export default function AdminViajeDetalle() {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error de conexion')
     } finally {
-      setLoading(false)
+      if (!silencioso) setLoading(false)
+    }
+  }
+
+  /** Corrige la cabecera. Devuelve el mensaje de error, o null si salió bien. */
+  const guardarCabecera = async (cambios: { salida?: string; llegada?: string; periodoLiquidar?: string }) => {
+    try {
+      const res = await fetch(`${API_URL}/gastos-viaje/${nroViaje}/cabecera`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(cambios),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) return data.error || `Error ${res.status}`
+      // Todas las líneas heredan la cabecera: se recargan todas
+      await cargarDatos(true)
+      return null
+    } catch {
+      return 'Error de conexión al guardar la cabecera'
     }
   }
 
   // Un total por moneda. `totalImporte` (suma cruda) se mantiene solo porque el
   // backend lo persiste en dbo.aprobaciones_viaje.total_importe; NO se muestra.
   const totalesGastos = totalesPorMoneda(
-    gastos.map(g => ({ pais: g.Pais, importe: g.Precio_Unitario ?? 0 }))
+    registros.map(r => ({ pais: r._pais, importe: r.USR_CORMVI_PRECIO ?? 0 }))
   )
-  const totalImporte = gastos.reduce((sum, g) => sum + (g.Precio_Unitario ?? 0), 0)
+  const totalImporte = registros.reduce((sum, r) => sum + (r.USR_CORMVI_PRECIO ?? 0), 0)
 
   const formatFecha = (fecha: string | null) => {
     if (!fecha) return 'En curso'
@@ -438,24 +415,25 @@ export default function AdminViajeDetalle() {
    * Elimina un gasto. Es la única pantalla donde se puede: el chofer carga y
    * consulta, pero el control de la rendición es del área administrativa.
    */
-  const eliminarGasto = async (g: GastoAPI, reg: CormviRecord) => {
-    const id = g._localId
+  const eliminarGasto = async (reg: FilaCormvi) => {
+    const id = reg._gastoId
     if (!id) return
 
-    const detalle = `${reg.CORMVI_TIPORI}/${reg.CORMVI_ARTORI}  ·  $ ${formatImporte(reg.USR_CORMVI_PRECIO)}`
+    // Con espacios, no con barra: 'TARIFA/5' no es un valor que exista en
+    // Softland, son dos columnas. Escribirlo junto confunde al leer el panel.
+    const detalle = `${reg.CORMVI_TIPORI} · ${reg.CORMVI_ARTORI}  ·  $ ${formatImporte(reg.USR_CORMVI_PRECIO)}`
     if (!confirm(`Eliminar este gasto del viaje ${nroViaje}?\n\n${detalle}\n\nNo se puede deshacer.`)) return
 
     setBorrando(id)
     try {
       // El token lleva el rol; sin él el backend responde 401.
-      const token = sessionStorage.getItem('admin_token') || ''
       const res = await fetch(`${API_URL}/gastos-viaje/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok && data.success !== false) {
-        setGastos(prev => prev.filter(x => x._localId !== id))
+        setRegistros(prev => prev.filter(x => x._gastoId !== id))
       } else {
         alert(data.error || 'No se pudo eliminar el gasto.')
       }
@@ -477,9 +455,9 @@ export default function AdminViajeDetalle() {
   }
 
   /**
-   * Guarda un solo campo de un gasto (edición inline).
-   * Actualiza la fila en memoria con lo que devuelve el servidor, en vez de
-   * recargar todo: la tabla es ancha y un reload completo perdería el scroll.
+   * Guarda un solo campo de un gasto (edición inline) y recarga en silencio:
+   * la fila la vuelve a armar el backend, así lo que se ve es exactamente lo
+   * que se exportaría. Sin spinner general, para no perder el scroll.
    */
   const guardarCampo = async (gastoId: string, campo: string, valor: any) => {
     setCeldaGuardando(`${gastoId}:${campo}`)
@@ -493,9 +471,7 @@ export default function AdminViajeDetalle() {
       const data = await res.json()
       if (!res.ok || !data.success) throw new Error(data.error || `Error ${res.status}`)
 
-      // Reemplazar sólo la fila afectada
-      const actualizado = localGastoToAPI(data.data)
-      setGastos(prev => prev.map(g => (g._localId === gastoId ? actualizado : g)))
+      await cargarDatos(true)
     } catch (err) {
       setErrorCelda(err instanceof Error ? err.message : 'No se pudo guardar el cambio')
       // Que el error no quede colgado en pantalla para siempre
@@ -506,25 +482,23 @@ export default function AdminViajeDetalle() {
   }
 
   // ── Edición de un gasto guardado en dibiagi_admin_db ──────────────
-  const abrirEdicion = (g: GastoAPI) => {
+  // Solo lo que es propio de cada gasto. Fechas, período y caja camión son de
+  // la cabecera; cantidad, coeficiente y valor ítem son fijos en un RRFF.
+  const abrirEdicion = (r: FilaCormvi) => {
     setErrorEdicion('')
-    setEditando(g)
+    setEditando(r)
     setForm({
-      codigoProveedor:       g.Proveedor ?? '',
-      tipoProducto:          g.Tipo_Producto ?? '',
-      codigoArticulo:        g.Codigo_Articulo ?? '',
-      formalidad:            g.Informal === 'S' ? 'INFORMAL' : 'FORMAL',
-      cantidad:              String(g.Cantidad ?? 1),
-      importe:               String(g.Precio_Unitario ?? 0),
-      cantidadCormvi:        String(g.Cantidad_CORMVI ?? 1),
-      valorItemSeleccionado: String(g.Valor_Item ?? g.Precio_Unitario ?? 0),
-      rendicion:             g.Numero_Formulario ?? '',
-      legajoChofer:          g.Legajo ?? '',
-      empresaChofer:         g.Empresa_Legajo ?? '',
-      chofer:                g.Nombre_Chofer ?? '',
-      patenteTractor:        g.Patente_Tractor ?? '',
-      descripcion:           g.Descripcion_Gasto ?? '',
-      fecha:                 g.Fecha_Salida ? new Date(g.Fecha_Salida).toISOString().split('T')[0] : '',
+      codigoProveedor: r.CORMVI_NROCTA ?? '',
+      tipoProducto:    r.CORMVI_TIPORI ?? '',
+      codigoArticulo:  r.CORMVI_ARTORI ?? '',
+      formalidad:      r._formalidad === 'FORMAL' ? 'FORMAL' : 'INFORMAL',
+      importe:         String(r.USR_CORMVI_PRECIO ?? 0),
+      rendicion:       r.USR_CORMVI_NROFOR ?? '',
+      legajoChofer:    r.USR_CORMVI_NROLEG ?? '',
+      empresaChofer:   r.USR_CORMVI_EMPLEG ?? '',
+      chofer:          r.USR_CORMVI_NOMLEG ?? '',
+      patenteTractor:  r.USR_CORMVI_PATTRA ?? '',
+      descripcion:     r._descripcion ?? '',
     })
   }
 
@@ -537,41 +511,32 @@ export default function AdminViajeDetalle() {
   const setCampo = (k: string, v: string) => setForm(prev => ({ ...prev, [k]: v }))
 
   const guardarEdicion = async () => {
-    if (!editando?._localId) return
+    if (!editando?._gastoId) return
 
     const importeNum = parseFloat(form.importe)
     if (isNaN(importeNum) || importeNum <= 0) {
       setErrorEdicion('El precio debe ser un número mayor a 0')
       return
     }
-    const cantidadNum = parseFloat(form.cantidad)
-    if (isNaN(cantidadNum)) {
-      setErrorEdicion('La cantidad debe ser un número')
-      return
-    }
 
     setGuardando(true)
     setErrorEdicion('')
     try {
-      const res = await fetch(`${API_URL}/gastos-viaje/${editando._localId}`, {
+      const res = await fetch(`${API_URL}/gastos-viaje/${editando._gastoId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          codigoProveedor:       form.codigoProveedor,
-          tipoProducto:          form.tipoProducto,
-          codigoArticulo:        form.codigoArticulo,
-          formalidad:            form.formalidad,
-          cantidad:              cantidadNum,
-          importe:               importeNum,
-          cantidadCormvi:        parseFloat(form.cantidadCormvi),
-          valorItemSeleccionado: parseFloat(form.valorItemSeleccionado),
-          rendicion:             form.rendicion,
-          legajoChofer:          form.legajoChofer,
-          empresaChofer:         form.empresaChofer,
-          chofer:                form.chofer,
-          patenteTractor:        form.patenteTractor,
-          descripcion:           form.descripcion,
-          ...(form.fecha ? { fecha: new Date(form.fecha).toISOString() } : {}),
+          codigoProveedor: form.codigoProveedor,
+          tipoProducto:    form.tipoProducto,
+          codigoArticulo:  form.codigoArticulo,
+          formalidad:      form.formalidad,
+          importe:         importeNum,
+          rendicion:       form.rendicion,
+          legajoChofer:    form.legajoChofer,
+          empresaChofer:   form.empresaChofer,
+          chofer:          form.chofer,
+          patenteTractor:  form.patenteTractor,
+          descripcion:     form.descripcion,
         })
       })
 
@@ -581,7 +546,7 @@ export default function AdminViajeDetalle() {
       }
 
       cerrarEdicion()
-      await cargarDatos()   // recarga desde la BD → /admin y la app del chofer quedan iguales
+      await cargarDatos(true)   // recarga desde la BD → /admin y la app del chofer quedan iguales
     } catch (err) {
       setErrorEdicion(err instanceof Error ? err.message : 'No se pudo guardar el cambio')
     } finally {
@@ -627,9 +592,7 @@ export default function AdminViajeDetalle() {
   const descargarJSON = () => {
     const payload = {
       nroViaje,
-      chofer: gastos[0]?.Nombre_Chofer || '',
-      legajoChofer: gastos[0]?.Legajo || '',
-      patenteTractor: gastos[0]?.Patente_Tractor || '',
+      cabecera,
       totalRegistros: registrosCormvi.length,
       totalImporte,
       aprobacion,
@@ -680,7 +643,7 @@ export default function AdminViajeDetalle() {
 
           {/* Estado + botones aprobar/revocar */}
           <div className="flex items-center gap-2 flex-shrink-0">
-            {gastos.length > 0 && (
+            {registros.length > 0 && (
               estaAprobado ? (
                 <button
                   onClick={revocarAprobacion}
@@ -768,18 +731,8 @@ export default function AdminViajeDetalle() {
                 </p>
                 <p className="text-sm text-gray-300">{hoja.Cod_Empresa}</p>
               </div>
-              <div>
-                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <FaCalendarAlt className="text-[9px]" /> Salida
-                </p>
-                <p className="text-sm text-gray-300">{formatFecha(hoja.Fecha_Salida)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <FaCalendarAlt className="text-[9px]" /> Llegada
-                </p>
-                <p className="text-sm text-gray-300">{formatFecha(hoja.Fecha_Llegada)}</p>
-              </div>
+              {/* Las fechas del viaje están en la tarjeta de cabecera: son las
+                  que van a Softland y se corrigen ahí, no acá. */}
               <div>
                 <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1 flex items-center gap-1">
                   <FaHashtag className="text-[9px]" /> N Viaje
@@ -788,7 +741,7 @@ export default function AdminViajeDetalle() {
               </div>
               <div>
                 <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1">
-                  Gastos  {gastos.length} registros
+                  Gastos  {registros.length} registros
                 </p>
                 <TotalesPorMoneda totales={totalesGastos} />
               </div>
@@ -806,8 +759,14 @@ export default function AdminViajeDetalle() {
           </div>
         )}
 
+        {/* Cabecera de la rendición: lo que en Softland es CORMVH */}
+        {cabecera && <CabeceraRendicion cabecera={cabecera} onGuardar={guardarCabecera} />}
+
+        {/* Las mismas reglas que corre la pantalla de Softland */}
+        {registros.length > 0 && <Validaciones hallazgos={validaciones} />}
+
         {/* Tabla CORMVI  siempre visible */}
-        {gastos.length === 0 ? (
+        {registros.length === 0 ? (
           <div className="text-center py-16 bg-white/[0.03] border border-white/[0.06] rounded-xl">
             <FaClipboardCheck className="text-2xl text-gray-700 mx-auto mb-3" />
             <p className="text-base font-medium text-white mb-1">Sin gastos</p>
@@ -885,6 +844,9 @@ export default function AdminViajeDetalle() {
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Total</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[150px]">Período a Liquidar</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[160px]">Observaciones</th>
+                    {/* Informativa: lo que escribió el chofer. En Softland esta
+                        columna va vacía, así que no se copia ni se exporta. */}
+                    <th className="text-left py-3 px-4 text-gray-500 font-bold text-xs uppercase tracking-wider min-w-[200px]">Detalle del ticket</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[130px]">Empresa Legajo</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[90px]">Legajo</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[130px]">Hoja de Viaje N°</th>
@@ -905,11 +867,10 @@ export default function AdminViajeDetalle() {
                   </tr>
                 </thead>
                 <tbody>
-                  {registrosCormvi.map((reg, i) => {
-                    const g = gastos[i]
-                    const id = g?._localId
-                    // Sólo los gastos guardados en dibiagi_admin_db se pueden editar.
-                    // Los que vienen de la API de portería son de solo lectura.
+                  {registros.map((reg, i) => {
+                    const id = reg._gastoId
+                    // Una fila que Softland rechazaría se marca en el borde
+                    const rechazada = validaciones.some(v => v.gastoId === id && v.nivel === 'bloquea')
                     const celda = (campo: string, extra: Partial<PropsCelda> = {}) => ({
                       gastoId: id,
                       campo,
@@ -919,16 +880,22 @@ export default function AdminViajeDetalle() {
                     })
 
                     return (
-                      <tr key={g?._localId || i} className="border-t border-white/[0.05] hover:bg-white/[0.03] transition-colors group">
+                      <tr
+                        key={id || i}
+                        title={rechazada ? 'Softland rechazaría esta línea — mirá las validaciones arriba' : undefined}
+                        className={`border-t border-white/[0.05] hover:bg-white/[0.03] transition-colors group ${
+                          rechazada ? 'bg-red-500/[0.04]' : ''
+                        }`}
+                      >
                         <td className="py-3.5 px-4 text-gray-500 font-bold sticky left-0 bg-[#0f1117]">{i + 1}</td>
 
                         {/* Foto del ticket */}
                         <td className="py-2 px-4 text-center">
-                          {id && g?._tieneFoto ? (
+                          {id && reg._tieneFoto ? (
                             <button
                               onClick={() => setFotoAmpliada({
                                 url: `${API_URL}/gastos-viaje/${id}/foto`,
-                                titulo: `${reg.CORMVI_TIPORI}/${reg.CORMVI_ARTORI} · $ ${formatImporte(reg.USR_CORMVI_PRECIO)}`,
+                                titulo: `${reg.CORMVI_TIPORI} · ${reg.CORMVI_ARTORI} · $ ${formatImporte(reg.USR_CORMVI_PRECIO)}`,
                               })}
                               title="Ver el ticket en grande"
                               className="w-12 h-12 rounded-md overflow-hidden border border-white/[0.1] hover:border-blue-400/60 transition-all inline-block bg-black/30"
@@ -975,14 +942,17 @@ export default function AdminViajeDetalle() {
                           )}
                         />
 
-                        <Celda {...celda('cantidad')} valor={reg.USR_CORMVI_CANTID} tipo="number" alinear="right" className="text-gray-200" />
+                        {/* Regla 7: un gasto de viaje se carga siempre con cantidad 1 */}
+                        <td className="py-3.5 px-4 text-right text-gray-500 tabular-nums" title="En un RRFF la cantidad es siempre 1">
+                          {reg.USR_CORMVI_CANTID}
+                        </td>
                         <Celda {...celda('importe')}  valor={reg.USR_CORMVI_PRECIO}  tipo="number" alinear="right"
                                className="text-white font-bold" render={(v) => formatImporte(Number(v))} />
 
                         {/* Moneda del gasto — solo para leer la tabla; no se copia */}
                         <td className="py-3.5 px-4" title="Moneda del gasto. No se copia a Softland.">
                           {(() => {
-                            const p = normalizarPais(g?.Pais)
+                            const p = normalizarPais(reg._pais)
                             return (
                               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                                 <span className="text-sm leading-none">{BANDERAS[p]}</span>
@@ -997,14 +967,20 @@ export default function AdminViajeDetalle() {
                           {formatImporte(reg.VIRT_TOTLIN)}
                         </td>
 
-                        {/* Derivado de la fecha — se cambia editando Fecha Salida */}
-                        <td className="py-3.5 px-4 text-gray-300" title="Se deriva de la Fecha Salida">{reg.USR_CORMVI_PERLIQ}</td>
+                        {/* De la cabecera: se corrige arriba, no fila por fila */}
+                        <td className="py-3.5 px-4 text-gray-300" title="Viene de la cabecera de la rendición">{reg.USR_CORMVI_PERLIQ}</td>
 
-                        <Celda {...celda('descripcion')} valor={reg.CORMVI_TEXTOS} className="text-gray-400" />
+                        {/* Vacía en el 99,96% de las líneas reales de Softland */}
+                        <td className="py-3.5 px-4 text-gray-700" title="En Softland esta columna va vacía">—</td>
+
+                        {/* Lo que cargó el chofer. Se edita, pero no viaja a Softland. */}
+                        <Celda {...celda('descripcion')} valor={reg._descripcion} className="text-gray-400" />
 
                         <Celda {...celda('empresaChofer')}  valor={reg.USR_CORMVI_EMPLEG} className="text-gray-300" />
                         <Celda {...celda('legajoChofer')}   valor={reg.USR_CORMVI_NROLEG} className="text-gray-200 font-semibold" />
-                        <Celda {...celda('nroViaje')}       valor={reg.USR_CORMVI_NROVIA} tipo="number" className="text-gray-200 font-semibold" />
+                        <td className="py-3.5 px-4 text-gray-200 font-semibold" title="Hoja de viaje de esta rendición">
+                          {reg.USR_CORMVI_NROVIA}
+                        </td>
                         <Celda {...celda('rendicion')}      valor={reg.USR_CORMVI_NROFOR} className="text-gray-400"
                                render={(v) => String(v).slice(-8)} />
                         <Celda {...celda('patenteTractor')} valor={reg.USR_CORMVI_PATTRA} className="text-gray-200 font-semibold" />
@@ -1014,28 +990,36 @@ export default function AdminViajeDetalle() {
                           {reg.USR_CORMVI_DELETE}
                         </td>
 
-                        <Celda
-                          {...celda('fecha')}
-                          valor={reg.USR_CORMVI_FCHCAL}
-                          tipo="date"
-                          className="text-gray-300"
-                          valorEdicion={reg.USR_CORMVI_FCHCAL ? String(reg.USR_CORMVI_FCHCAL).split(' ')[0] : ''}
-                          render={(v) => (v ? String(v).split(' ')[0] : '')}
-                        />
-                        <Celda {...celda('coeficienteViaje')}      valor={reg.USR_CORMVI_COSAVI} tipo="number" className="text-gray-500" />
-                        <Celda {...celda('valorItemSeleccionado')} valor={reg.USR_CORMVI_VAITSE} tipo="number" alinear="right" className="text-gray-400" />
-                        <Celda {...celda('chofer')}                valor={reg.USR_CORMVI_NOMLEG} className="text-gray-200" />
-                        <Celda {...celda('valorCajaCamion')}       valor={reg.USR_CORMVI_CAJCAM} tipo="number" className="text-gray-500" />
-                        <Celda {...celda('importe')}               valor={reg.CORMVI_PRECIO} tipo="number" alinear="right"
-                               className="text-gray-300" render={(v) => formatImporte(Number(v))} />
-                        <Celda {...celda('cantidadCormvi')}        valor={reg.CORMVI_CANTID} tipo="number" alinear="right" className="text-gray-300" />
+                        {/* Fecha de salida del VIAJE (no la del ticket): es de la cabecera */}
+                        <td className="py-3.5 px-4 text-gray-300" title="Fecha de salida del viaje. Se corrige en la cabecera.">
+                          {fechaCorta(reg.USR_CORMVI_FCHCAL) || <span className="text-gray-700">—</span>}
+                        </td>
+                        {/* En los RRFF reales estas dos son 0: las completa Softland al autorizar */}
+                        <td className="py-3.5 px-4 text-gray-600 tabular-nums" title="Siempre 0 en un RRFF: lo calcula Softland al autorizar">
+                          {reg.USR_CORMVI_COSAVI}
+                        </td>
+                        <td className="py-3.5 px-4 text-right text-gray-600 tabular-nums" title="Siempre 0 en un RRFF: lo calcula Softland al autorizar">
+                          {reg.USR_CORMVI_VAITSE}
+                        </td>
+                        <Celda {...celda('chofer')} valor={reg.USR_CORMVI_NOMLEG} className="text-gray-200" />
+                        <td className="py-3.5 px-4 text-gray-500 tabular-nums" title="Valor vigente de la caja camión (USR_CAJCAM). Viene de la cabecera.">
+                          {reg.USR_CORMVI_CAJCAM ?? <span className="text-gray-700">—</span>}
+                        </td>
+                        {/* Mismo precio y misma cantidad que las columnas USR_: Softland
+                            guarda las dos y tienen que coincidir */}
+                        <td className="py-3.5 px-4 text-right text-gray-300 tabular-nums" title="Igual al precio de arriba">
+                          {formatImporte(reg.CORMVI_PRECIO)}
+                        </td>
+                        <td className="py-3.5 px-4 text-right text-gray-500 tabular-nums" title="En un RRFF la cantidad es siempre 1">
+                          {reg.CORMVI_CANTID}
+                        </td>
 
-                        {/* Derivados: período numérico y fecha de llegada de la hoja de ruta */}
-                        <td className="py-3.5 px-4 text-right text-gray-300 tabular-nums" title="Mismo período que 'Período a liquidar', en numérico">
+                        {/* De la cabecera: período numérico y fecha de llegada */}
+                        <td className="py-3.5 px-4 text-right text-gray-300 tabular-nums" title="Mes de carga. Viene de la cabecera.">
                           {reg.USR_CORMVI_PERIOD || ''}
                         </td>
-                        <td className="py-3.5 px-4 text-gray-300" title="Fecha de llegada de la hoja de ruta">
-                          {reg.USR_CORMVI_FCHLLE ? String(reg.USR_CORMVI_FCHLLE).split('T')[0].split(' ')[0] : ''}
+                        <td className="py-3.5 px-4 text-gray-300" title="Fecha de llegada del viaje. Se corrige en la cabecera.">
+                          {fechaCorta(reg.USR_CORMVI_FCHLLE) || <span className="text-gray-700">—</span>}
                         </td>
 
                         {/* Copiar la fila completa en el orden de columnas de Softland */}
@@ -1059,7 +1043,7 @@ export default function AdminViajeDetalle() {
                           {id ? (
                             <div className="inline-flex items-center gap-1.5">
                               <button
-                                onClick={() => abrirEdicion(g)}
+                                onClick={() => abrirEdicion(reg)}
                                 title="Editar todos los campos de este gasto"
                                 className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-blue-500/20 text-gray-400 hover:text-blue-300 border border-white/[0.08] transition-all inline-flex items-center justify-center"
                               >
@@ -1068,7 +1052,7 @@ export default function AdminViajeDetalle() {
                               {/* El borrado solo lo ve el rol 'admin' */}
                               {puedeEliminar && (
                                 <button
-                                  onClick={() => eliminarGasto(g, reg)}
+                                  onClick={() => eliminarGasto(reg)}
                                   disabled={borrando === id}
                                   title="Eliminar este gasto"
                                   className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-red-500/20 text-gray-500 hover:text-red-300 border border-white/[0.08] transition-all inline-flex items-center justify-center disabled:opacity-40"
@@ -1092,14 +1076,14 @@ export default function AdminViajeDetalle() {
                       key={t.pais}
                       className={`bg-white/[0.03] ${i === 0 ? 'border-t-2 border-white/[0.08]' : ''}`}
                     >
-                      {/* 10 de etiqueta + el importe bajo "Precio" + las 21 restantes = 32 */}
+                      {/* 10 de etiqueta + el importe bajo "Precio" + las 22 restantes = 33 */}
                       <td colSpan={10} className="py-3 px-4 text-right font-bold text-gray-400 text-xs uppercase tracking-wider">
                         Total {t.moneda}  <span className="text-gray-600 normal-case">{t.cantidad} reg.</span>
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-white text-base tabular-nums">
                         {formatImporte(t.total)}
                       </td>
-                      <td colSpan={21} />
+                      <td colSpan={22} />
                     </tr>
                   ))}
                 </tbody>
@@ -1209,23 +1193,18 @@ export default function AdminViajeDetalle() {
                     <div className="mt-1"><ProveedorInfo valor={form.codigoProveedor} compacto /></div>
                   </div>
                   <Campo label="Rendición" value={form.rendicion} onChange={(v) => setCampo('rendicion', v)} placeholder="0001-00001234" />
-                  <Campo label="Fecha salida" type="date" value={form.fecha} onChange={(v) => setCampo('fecha', v)} />
                 </div>
               </div>
 
-              {/* Importes */}
+              {/* Importe. Cantidad, coeficiente y valor ítem no se editan: en un
+                  RRFF la cantidad es 1 y los otros dos los calcula Softland. */}
               <div>
-                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Importes</p>
+                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Importe</p>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <Campo label="Precio" type="number" value={form.importe} onChange={(v) => setCampo('importe', v)} />
-                  <Campo label="Cantidad" type="number" value={form.cantidad} onChange={(v) => setCampo('cantidad', v)} />
-                  <Campo label="Cant. CORMVI" type="number" value={form.cantidadCormvi} onChange={(v) => setCampo('cantidadCormvi', v)} />
-                  <Campo label="Valor ítem" type="number" value={form.valorItemSeleccionado} onChange={(v) => setCampo('valorItemSeleccionado', v)} />
                 </div>
                 <p className="text-[11px] text-gray-600 mt-2">
-                  Total línea: <span className="text-emerald-400 font-medium">
-                    $ {formatImporte((parseFloat(form.cantidad) || 0) * (parseFloat(form.importe) || 0))}
-                  </span>
+                  La línea va con cantidad 1: el total es el mismo precio.
                 </p>
               </div>
 
@@ -1240,7 +1219,8 @@ export default function AdminViajeDetalle() {
                 </div>
               </div>
 
-              <Campo label="Descripción" value={form.descripcion} onChange={(v) => setCampo('descripcion', v)} />
+              <Campo label="Detalle del ticket (queda en el panel, no va a Softland)"
+                     value={form.descripcion} onChange={(v) => setCampo('descripcion', v)} />
             </div>
 
             {/* Footer del modal */}
@@ -1266,6 +1246,254 @@ export default function AdminViajeDetalle() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   VALIDACIONES DE SOFTLAND
+
+   Las reglas del motor GRTQVI (contexto CORMVH) corren mientras se tipea
+   en la pantalla del ERP. Acá se corren antes, sobre la tabla armada, para
+   que nadie pegue una rendición que Softland va a rechazar.
+
+   El mensaje que se muestra es el TEXTUAL del ERP, con su número de regla:
+   así, si administración lo ve después en Softland, es la misma frase.
+   ══════════════════════════════════════════════════════════════════ */
+
+function Validaciones({ hallazgos }: { hallazgos: Hallazgo[] }) {
+  const bloqueos = hallazgos.filter(h => h.nivel === 'bloquea')
+  const avisos = hallazgos.filter(h => h.nivel === 'aviso')
+
+  if (hallazgos.length === 0) {
+    return (
+      <div className="flex items-center gap-2 p-4 rounded-xl bg-emerald-500/[0.04] border border-emerald-500/20">
+        <FaCheck className="text-emerald-400 text-sm flex-shrink-0" />
+        <p className="text-sm text-emerald-400">
+          Pasa las validaciones de Softland para cargar una rendición.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`rounded-xl border p-5 ${
+      bloqueos.length
+        ? 'bg-red-500/[0.04] border-red-500/20'
+        : 'bg-amber-500/[0.04] border-amber-500/20'
+    }`}>
+      <div className="flex items-center gap-2 mb-1">
+        <FaExclamationTriangle className={`text-sm ${bloqueos.length ? 'text-red-400' : 'text-amber-400'}`} />
+        <h2 className="text-sm font-semibold text-white">Validaciones de Softland</h2>
+      </div>
+      <p className="text-[11px] text-gray-500 mb-4">
+        {bloqueos.length > 0 && <>{bloqueos.length} {bloqueos.length === 1 ? 'rechazo' : 'rechazos'}</>}
+        {bloqueos.length > 0 && avisos.length > 0 && ' · '}
+        {avisos.length > 0 && <>{avisos.length} {avisos.length === 1 ? 'aviso' : 'avisos'}</>}
+        {' — es lo mismo que diría el ERP al cargar esta rendición.'}
+      </p>
+
+      <ul className="space-y-2.5">
+        {hallazgos.map((h, i) => (
+          <li key={i} className="flex items-start gap-2.5">
+            <span className={`mt-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${
+              h.nivel === 'bloquea'
+                ? 'bg-red-500/15 text-red-300'
+                : 'bg-amber-500/15 text-amber-300'
+            }`}>
+              {h.nivel === 'bloquea' ? 'RECHAZA' : 'AVISA'}
+            </span>
+            <div className="min-w-0">
+              <p className={`text-xs ${h.nivel === 'bloquea' ? 'text-red-300' : 'text-amber-300'}`}>
+                {h.mensaje}
+              </p>
+              {h.comoSeArregla && (
+                <p className="text-[11px] text-gray-500 mt-0.5">{h.comoSeArregla}</p>
+              )}
+            </div>
+            {h.regla > 0 && (
+              <span className="ml-auto text-[10px] text-gray-600 flex-shrink-0" title="Número de regla en el motor GRTQVI de Softland">
+                regla {h.regla}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   CABECERA DE LA RENDICIÓN — el equivalente a CORMVH
+
+   Estas tres fechas son del viaje, no de cada ticket: todas las líneas
+   heredan las mismas. Se calculan como en Softland (salida de la hoja de
+   ruta, llegada de portería, período por la función usr_fn_devuelvePeriodo)
+   y acá se pueden corregir. Corregir vuelve a armar todas las filas.
+   ══════════════════════════════════════════════════════════════════ */
+
+const ORIGEN_ETIQUETA: Record<OrigenCabecera, { texto: string; clase: string; ayuda: string }> = {
+  chofer:    { texto: 'lo declaró el chofer', clase: 'bg-emerald-500/10 text-emerald-300', ayuda: 'El chofer la declaró al cerrar la hoja en la app, el día que llegó' },
+  hoja:      { texto: 'hoja de ruta', clase: 'bg-blue-500/10 text-blue-300',      ayuda: 'Fecha cargada en la hoja de ruta (USR_GTVIAH)' },
+  porteria:  { texto: 'portería',     clase: 'bg-blue-500/10 text-blue-300',      ayuda: 'Primera entrada del tractor por portería después de la salida' },
+  calculado: { texto: 'calculado',    clase: 'bg-white/[0.06] text-gray-400',     ayuda: 'Lo calcula la misma fórmula que usa Softland' },
+  manual:    { texto: 'corregido',    clase: 'bg-amber-500/10 text-amber-300',    ayuda: 'Corregido a mano desde este panel' },
+  'sin-dato':{ texto: 'sin dato',     clase: 'bg-red-500/10 text-red-300',        ayuda: 'No hay dato: Softland va a rechazar la rendición así' },
+}
+
+function CabeceraRendicion({
+  cabecera, onGuardar,
+}: {
+  cabecera: Cabecera
+  onGuardar: (cambios: { salida?: string; llegada?: string; periodoLiquidar?: string }) => Promise<string | null>
+}) {
+  const [guardando, setGuardando] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  const aplicar = async (campo: 'salida' | 'llegada' | 'periodoLiquidar', valor: string) => {
+    setGuardando(campo)
+    setError('')
+    const err = await onGuardar({ [campo]: valor })
+    if (err) {
+      setError(err)
+      setTimeout(() => setError(''), 8000)
+    }
+    setGuardando(null)
+  }
+
+  const hayCorreccion = [cabecera.salida, cabecera.llegada, cabecera.periodoLiquidar]
+    .some(v => v.origen === 'manual')
+
+  return (
+    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
+      <div className="flex items-center gap-2 mb-1">
+        <FaCalendarAlt className="text-purple-400 text-sm" />
+        <h2 className="text-sm font-semibold text-white">Cabecera de la rendición</h2>
+        {hayCorreccion && cabecera.actualizadoPor && (
+          <span className="ml-auto text-[10px] text-amber-400/80">
+            Corregido por {cabecera.actualizadoPor}
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] text-gray-600 mb-4">
+        Son datos del viaje: todas las líneas se cargan con estos valores.
+      </p>
+
+      {error && (
+        <div className="flex items-center gap-2 p-3 mb-4 rounded-lg bg-red-500/[0.06] border border-red-500/20">
+          <FaExclamationTriangle className="text-red-400 text-xs flex-shrink-0" />
+          <p className="text-xs text-red-400">{error}</p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <CampoCabecera
+          label="Fecha de salida"
+          valor={cabecera.salida}
+          tipo="date"
+          guardando={guardando === 'salida'}
+          onAplicar={(v) => aplicar('salida', v)}
+        />
+        <CampoCabecera
+          label="Fecha de llegada"
+          valor={cabecera.llegada}
+          tipo="date"
+          guardando={guardando === 'llegada'}
+          onAplicar={(v) => aplicar('llegada', v)}
+        />
+        <CampoCabecera
+          label="Período a liquidar"
+          valor={cabecera.periodoLiquidar}
+          tipo="text"
+          placeholder="AAAAMM"
+          guardando={guardando === 'periodoLiquidar'}
+          onAplicar={(v) => aplicar('periodoLiquidar', v)}
+        />
+        <div className="space-y-3">
+          <div>
+            <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Período</p>
+            <p className="text-sm text-gray-300 font-mono" title="Mes en que se carga la rendición">
+              {cabecera.periodo || '—'}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Caja camión</p>
+            <p className="text-sm text-gray-300 font-mono" title="Valor vigente a la fecha de salida (USR_CAJCAM)">
+              {cabecera.cajaCamion ?? '—'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  )
+}
+
+/**
+ * Un campo de la cabecera con su origen. El botón de volver atrás solo aparece
+ * si el valor fue corregido a mano: manda "" y vuelve a mandar el calculado.
+ */
+function CampoCabecera({
+  label, valor, tipo, placeholder, guardando, onAplicar,
+}: {
+  label: string
+  valor: ValorCabecera
+  tipo: 'date' | 'text'
+  placeholder?: string
+  guardando: boolean
+  onAplicar: (v: string) => void
+}) {
+  const [borrador, setBorrador] = useState(valor.valor || '')
+  const origen = ORIGEN_ETIQUETA[valor.origen]
+
+  // Si el valor cambió del lado del servidor (p. ej. al revertir), se refleja acá
+  useEffect(() => { setBorrador(valor.valor || '') }, [valor.valor])
+
+  const sinCambios = (valor.valor || '') === borrador
+
+  return (
+    <div>
+      <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+        {label}
+        <span className={`normal-case tracking-normal px-1.5 py-0.5 rounded ${origen.clase}`} title={origen.ayuda}>
+          {origen.texto}
+        </span>
+      </p>
+      <div className="flex items-center gap-1.5">
+        <input
+          type={tipo}
+          value={borrador}
+          placeholder={placeholder}
+          disabled={guardando}
+          onChange={(e) => setBorrador(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !sinCambios) onAplicar(borrador) }}
+          className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-2.5 py-1.5 text-sm text-white placeholder:text-gray-700 focus:outline-none focus:border-blue-500/50 transition-colors disabled:opacity-50"
+        />
+        {guardando ? (
+          <FaSpinner className="animate-spin text-blue-400 text-xs flex-shrink-0" />
+        ) : (
+          <>
+            {!sinCambios && (
+              <button
+                onClick={() => onAplicar(borrador)}
+                title="Guardar esta corrección"
+                className="w-7 h-7 rounded-md bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center flex-shrink-0 transition-all"
+              >
+                <FaSave className="text-[10px]" />
+              </button>
+            )}
+            {valor.origen === 'manual' && sinCambios && (
+              <button
+                onClick={() => onAplicar('')}
+                title="Volver al valor calculado"
+                className="w-7 h-7 rounded-md bg-white/[0.05] hover:bg-white/[0.1] text-gray-400 hover:text-white border border-white/[0.08] flex items-center justify-center flex-shrink-0 transition-all"
+              >
+                <FaUndo className="text-[10px]" />
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }

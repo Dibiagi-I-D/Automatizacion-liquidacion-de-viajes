@@ -1,6 +1,9 @@
 import { Router, Request, Response } from 'express'
 import adminDb, { sql } from '../services/adminDbService.js'
-import { requiereRolAdmin, AdminRequest } from '../middleware/auth.js'
+import { requiereRolAdmin, requiereSesionAdmin, AdminRequest } from '../middleware/auth.js'
+import { obtenerCabecera, guardarCorreccionCabecera, gastoAFilaCormvi } from '../services/cormviService.js'
+import { validarRendicion } from '../services/reglasRendicion.js'
+import { normalizarTipo, normalizarCodigo } from '../services/conceptosSoftland.js'
 
 const router = Router()
 
@@ -46,67 +49,6 @@ interface Aprobacion {
   aprobadoPor: string
   fechaAprobacion: string
   totalImporte: number
-}
-
-// ═══════════════════════════════════════════════════════════════
-// INTERFAZ CORMVI — Movimientos de Softland (formato de exportación)
-// ═══════════════════════════════════════════════════════════════
-interface CormviRecord {
-  CORMVI_NROCTA: string      // PROVEEDOR
-  CORMVI_TIPORI: string      // TIPO DE PRODUCTO ORIGINAL
-  CORMVI_ARTORI: string      // CODIGO PRODUCTO ORIGINAL
-  CORMVI_TIPCPT: string      // TIPO DE CONCEPTO — siempre 'A'
-  CORMVI_CODCPT: string      // CONCEPTO — siempre 'S000'
-  CORMVI_COFLIS: string      // COEFICIENTE — siempre 'ARS'
-  USR_CORMVI_NLIIVA: string  // INFORMAL — 'S' informal / 'N' formal
-  USR_CORMVI_CANTID: number  // CANTIDAD
-  USR_CORMVI_PRECIO: number  // PRECIO
-  VIRT_TOTLIN: number        // (virtual) CANTIDAD × PRECIO
-  USR_CORMVI_PERLIQ: string  // PERIODO A LIQUIDAR (YYYYMM)
-  USR_CORMVI_EMPLEG: string  // EMPRESA LEGAJO
-  USR_CORMVI_NROLEG: string  // LEGAJO
-  USR_CORMVI_NROVIA: number  // HOJA DE VIAJE N
-  USR_CORMVI_NROFOR: string  // RENDICION
-  USR_CORMVI_PATTRA: string  // TRACTOR
-  USR_CORMVI_FCHCAL: string | null  // FECHA SALIDA
-  USR_CORMVI_COSAVI: number | null  // COEF. VIAJE SEGUN FECHA SALIDA
-  USR_CORMVI_VAITSE: number  // VALOR DE ITEM SELECCIONADO
-  USR_CORMVI_NOMLEG: string  // NOMBRE EMPLEADO
-  USR_CORMVI_CAJCAM: number | null  // VALOR DE LA CAJA CAMION
-  CORMVI_PRECIO: number      // PRECIO (estándar Softland)
-  CORMVI_CANTID: number      // CANTIDAD — en RRFF real siempre 1 (o 0), nunca negativa
-}
-
-function gastoToCormvi(gasto: Gasto): CormviRecord {
-  const fechaGasto = new Date(gasto.fecha)
-  const periodoLiq = `${fechaGasto.getFullYear()}${String(fechaGasto.getMonth() + 1).padStart(2, '0')}`
-  const fechaSalida = gasto.fecha ? `${fechaGasto.toISOString().replace('T', ' ').replace('Z', '')}` : null
-
-  return {
-    CORMVI_NROCTA:         gasto.codigoProveedor || '',
-    CORMVI_TIPORI:         gasto.tipoProducto || '',
-    CORMVI_ARTORI:         gasto.codigoArticulo || '',
-    CORMVI_TIPCPT:         'A',
-    CORMVI_CODCPT:         'S000',
-    CORMVI_COFLIS:         'ARS',
-    USR_CORMVI_NLIIVA:     gasto.formalidad === 'INFORMAL' ? 'S' : 'N',
-    USR_CORMVI_CANTID:     gasto.cantidad ?? 1,
-    USR_CORMVI_PRECIO:     gasto.importe,
-    VIRT_TOTLIN:           (gasto.cantidad ?? 1) * gasto.importe,
-    USR_CORMVI_PERLIQ:     periodoLiq,
-    USR_CORMVI_EMPLEG:     gasto.empresaChofer || '',
-    USR_CORMVI_NROLEG:     gasto.legajoChofer || '',
-    USR_CORMVI_NROVIA:     gasto.nroViaje,
-    USR_CORMVI_NROFOR:     gasto.rendicion || gasto.id,
-    USR_CORMVI_PATTRA:     gasto.patenteTractor || '',
-    USR_CORMVI_FCHCAL:     fechaSalida,
-    USR_CORMVI_COSAVI:     gasto.coeficienteViaje ?? null,
-    USR_CORMVI_VAITSE:     gasto.valorItemSeleccionado ?? 0,
-    USR_CORMVI_NOMLEG:     gasto.chofer || '',
-    USR_CORMVI_CAJCAM:     gasto.valorCajaCamion ?? null,
-    CORMVI_PRECIO:         gasto.importe,
-    CORMVI_CANTID:         gasto.cantidadCormvi ?? 1,
-  }
 }
 
 // ─── Mapeo fila SQL → objeto Gasto (mismas claves que antes) ───
@@ -286,8 +228,9 @@ router.post('/', async (req: Request, res: Response) => {
     rq.input('fecha',                  sql.DateTime2,      new Date(fecha))
     rq.input('pais',                   sql.NVarChar(8),    txt(pais))
     rq.input('tipo',                   sql.NVarChar(200),  txt(tipo) || 'COMBUSTIBLE')
-    rq.input('tipo_producto',          sql.NVarChar(32),   txt(tipoProducto))
-    rq.input('codigo_articulo',        sql.NVarChar(32),   txt(codigoArticulo))
+    // Softland guarda el tipo en MAYÚSCULAS (100% de las líneas reales)
+    rq.input('tipo_producto',          sql.NVarChar(32),   normalizarTipo(tipoProducto))
+    rq.input('codigo_articulo',        sql.NVarChar(32),   normalizarCodigo(codigoArticulo))
     rq.input('formalidad',             sql.NVarChar(16),   txt(formalidad) || 'INFORMAL')
     rq.input('codigo_proveedor',       sql.NVarChar(64),   txt(codigoProveedor))
     rq.input('importe',                sql.Decimal(18, 4), importeNum)
@@ -342,8 +285,8 @@ const CAMPOS_EDITABLES: Record<string, { col: string; type: any; parse: (v: any)
   fecha:                 { col: 'fecha',                   type: sql.DateTime2,      parse: (v) => new Date(v) },
   pais:                  { col: 'pais',                    type: sql.NVarChar(8),    parse: txt },
   tipo:                  { col: 'tipo',                    type: sql.NVarChar(200),  parse: txt },
-  tipoProducto:          { col: 'tipo_producto',           type: sql.NVarChar(32),   parse: txt },
-  codigoArticulo:        { col: 'codigo_articulo',         type: sql.NVarChar(32),   parse: txt },
+  tipoProducto:          { col: 'tipo_producto',           type: sql.NVarChar(32),   parse: normalizarTipo },
+  codigoArticulo:        { col: 'codigo_articulo',         type: sql.NVarChar(32),   parse: normalizarCodigo },
   formalidad:            { col: 'formalidad',              type: sql.NVarChar(16),   parse: txt },
   codigoProveedor:       { col: 'codigo_proveedor',        type: sql.NVarChar(64),   parse: txt },
   importe:               { col: 'importe',                 type: sql.Decimal(18, 4), parse: (v) => parseFloat(v) },
@@ -576,7 +519,8 @@ router.get('/exportar-cormvi/:nroViaje', async (req: Request, res: Response) => 
       return res.status(404).json({ success: false, error: 'No hay gastos para este viaje' })
     }
 
-    const registrosCormvi = gastosDelViaje.map(g => gastoToCormvi(g))
+    const cabecera = await obtenerCabecera(nroViaje, gastosDelViaje[0]?.empresaChofer || '')
+    const registrosCormvi = gastosDelViaje.map(g => gastoAFilaCormvi(g, cabecera))
     const totalImporte = gastosDelViaje.reduce((sum, g) => sum + g.importe, 0)
     const a = ap.recordset[0]
 
@@ -597,12 +541,94 @@ router.get('/exportar-cormvi/:nroViaje', async (req: Request, res: Response) => 
           fechaAprobacion: new Date(a.fecha_aprobacion).toISOString(),
           totalImporte: Number(a.total_importe),
         },
+        cabecera,
         registros: registrosCormvi,
         gastosOriginales: gastosDelViaje
       }
     })
   } catch (error: any) {
     return dbError(res, error, 'exportar a CORMVI')
+  }
+})
+
+// ════════════════════════════════════════════════════════════
+// REGISTROS CORMVI DEL VIAJE — lo que muestra el panel
+// La fila se arma en cormviService: es la misma que se insertaría
+// en Softland, así lo que se revisa es lo que se va a grabar.
+// Rutas de 2 segmentos → no las captura GET /:nroViaje.
+// ════════════════════════════════════════════════════════════
+
+router.get('/:nroViaje/cormvi', requiereSesionAdmin, async (req: Request, res: Response) => {
+  const nroViaje = parseInt(req.params.nroViaje)
+  if (!Number.isFinite(nroViaje)) {
+    return res.status(400).json({ success: false, error: 'Número de viaje inválido' })
+  }
+
+  try {
+    const rq = await adminDb.request()
+    rq.input('nro_viaje', sql.Int, nroViaje)
+    const result = await rq.query(`
+      SELECT ${SELECT_LIST} FROM dbo.gastos_viaje
+      WHERE nro_viaje = @nro_viaje AND ${SOLO_GASTOS} ORDER BY created_at
+    `)
+    const gastos = result.recordset.map(rowToGasto)
+
+    const cabecera = await obtenerCabecera(nroViaje, gastos[0]?.empresaChofer || '')
+    const registros = gastos.map(g => gastoAFilaCormvi(g, cabecera))
+    // Las mismas reglas que corre la pantalla de Softland al cargar una RRFF
+    const validaciones = await validarRendicion(cabecera, registros)
+
+    res.json({ success: true, data: { cabecera, registros, validaciones } })
+  } catch (error: any) {
+    return dbError(res, error, 'armar los registros CORMVI')
+  }
+})
+
+/**
+ * Corrige la cabecera del viaje. Cada campo es opcional:
+ *   ausente → no se toca · "" o null → vuelve al valor calculado · valor → se fija
+ */
+router.put('/:nroViaje/cabecera', requiereSesionAdmin, async (req: Request, res: Response) => {
+  const nroViaje = parseInt(req.params.nroViaje)
+  if (!Number.isFinite(nroViaje)) {
+    return res.status(400).json({ success: false, error: 'Número de viaje inválido' })
+  }
+
+  const { salida, llegada, periodoLiquidar } = req.body
+  const esFecha = (v: any) => v === undefined || v === null || v === '' || /^\d{4}-\d{2}-\d{2}$/.test(String(v))
+
+  if (!esFecha(salida) || !esFecha(llegada)) {
+    return res.status(400).json({ success: false, error: 'Las fechas van con formato AAAA-MM-DD' })
+  }
+  if (periodoLiquidar !== undefined && periodoLiquidar !== null && periodoLiquidar !== ''
+      && !/^\d{4}(0[1-9]|1[0-2])$/.test(String(periodoLiquidar))) {
+    return res.status(400).json({ success: false, error: 'El período va con formato AAAAMM (ej. 202609)' })
+  }
+
+  const quien = (req as AdminRequest).admin?.nombre || (req as AdminRequest).admin?.usuario || 'panel'
+
+  try {
+    // Se valida contra lo que quedaría vigente, no solo contra lo que llegó:
+    // si se corrige únicamente la llegada, se compara con la salida actual.
+    const actual = await obtenerCabecera(nroViaje)
+    const salidaFinal  = salida  ? salida  : (salida  === undefined ? actual.salida.valor  : null)
+    const llegadaFinal = llegada ? llegada : (llegada === undefined ? actual.llegada.valor : null)
+
+    // Regla 41 de Softland
+    if (salidaFinal && llegadaFinal && salidaFinal > llegadaFinal) {
+      return res.status(400).json({ success: false, error: 'La fecha de salida no puede ser mayor que la de llegada' })
+    }
+    // Regla 33 de Softland
+    if (llegada && llegada > new Date().toISOString().slice(0, 10)) {
+      return res.status(400).json({ success: false, error: 'La fecha de llegada no puede ser posterior a hoy' })
+    }
+
+    await guardarCorreccionCabecera(nroViaje, { salida, llegada, periodoLiquidar }, quien)
+    const cabecera = await obtenerCabecera(nroViaje)
+    console.log(`[Cabecera] Viaje ${nroViaje} corregido por ${quien}`)
+    res.json({ success: true, data: cabecera })
+  } catch (error: any) {
+    return dbError(res, error, 'guardar la cabecera del viaje', true)
   }
 })
 
@@ -670,7 +696,7 @@ router.get('/finalizadas/lista', async (req: Request, res: Response) => {
       where += ' AND LTRIM(RTRIM(legajo_chofer)) = @legajo'
     }
     const result = await rq.query(`
-      SELECT nro_viaje, legajo_chofer, chofer, patente_tractor, created_at
+      SELECT nro_viaje, legajo_chofer, chofer, patente_tractor, fecha, created_at
       FROM dbo.gastos_viaje WHERE ${where} ORDER BY created_at DESC
     `)
 
@@ -681,6 +707,9 @@ router.get('/finalizadas/lista', async (req: Request, res: Response) => {
         legajoChofer: (r.legajo_chofer || '').trim(),
         chofer: r.chofer || '',
         patenteTractor: r.patente_tractor || '',
+        // La que declaró el chofer; `finalizadaAt` es cuándo apretó el botón,
+        // que puede ser días después de haber llegado.
+        fechaLlegada: r.fecha ? new Date(r.fecha).toISOString().slice(0, 10) : null,
         finalizadaAt: r.created_at ? new Date(r.created_at).toISOString() : '',
       })),
     })
@@ -692,7 +721,7 @@ router.get('/finalizadas/lista', async (req: Request, res: Response) => {
 // ─── POST /api/gastos-viaje/finalizar/:nroViaje ── El chofer cierra la hoja ───
 router.post('/finalizar/:nroViaje', async (req: Request, res: Response) => {
   const nroViaje = parseInt(req.params.nroViaje)
-  const { legajoChofer, chofer, patenteTractor } = req.body
+  const { legajoChofer, chofer, patenteTractor, fechaLlegada } = req.body
 
   if (!Number.isFinite(nroViaje)) {
     return res.status(400).json({ success: false, error: 'Número de viaje inválido' })
@@ -701,6 +730,29 @@ router.post('/finalizar/:nroViaje', async (req: Request, res: Response) => {
   const legajo = txt(legajoChofer)
   if (!legajo) {
     return res.status(400).json({ success: false, error: 'El legajo del chofer es requerido' })
+  }
+
+  // ── La fecha de llegada la declara el chofer ──────────────────────
+  // Es el dato que antes se reconstruía de portería días después. Se valida
+  // acá con las mismas dos reglas que aplicaría Softland, para que el error
+  // aparezca en el celular y no tres días más tarde en el panel.
+  const llegada = txt(fechaLlegada)
+  if (llegada) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(llegada)) {
+      return res.status(400).json({ success: false, error: 'La fecha de llegada va con formato AAAA-MM-DD' })
+    }
+    // Regla 33 de Softland
+    if (llegada > new Date().toISOString().slice(0, 10)) {
+      return res.status(400).json({ success: false, error: 'La fecha de llegada no puede ser posterior a hoy' })
+    }
+    // Regla 41 de Softland
+    const cab = await obtenerCabecera(nroViaje)
+    if (cab.salida.valor && llegada < cab.salida.valor) {
+      return res.status(400).json({
+        success: false,
+        error: `El viaje salió el ${cab.salida.valor.split('-').reverse().join('/')}: la llegada no puede ser anterior`,
+      })
+    }
   }
 
   try {
@@ -712,22 +764,29 @@ router.post('/finalizar/:nroViaje', async (req: Request, res: Response) => {
     rq.input('legajo_chofer',   sql.NVarChar(64),   legajo)
     rq.input('chofer',          sql.NVarChar(200),  txt(chofer))
     rq.input('patente_tractor', sql.NVarChar(64),   txt(patenteTractor))
+    // La fecha declarada viaja en la columna `fecha` del marcador, que en
+    // estos registros estaba sin usar. No hace falta tabla nueva.
+    rq.input('fecha',           sql.DateTime2,      llegada ? new Date(`${llegada}T00:00:00Z`) : null)
 
-    // MERGE → idempotente: tocar "finalizar" dos veces no duplica el marcador
+    // MERGE → idempotente: tocar "finalizar" dos veces no duplica el marcador.
+    // Si ya estaba finalizada, se actualiza la fecha: el chofer puede corregirla.
     await rq.query(`
       MERGE dbo.gastos_viaje AS t
       USING (SELECT @id AS id) AS s ON t.id = s.id
+      WHEN MATCHED THEN
+        UPDATE SET fecha = ISNULL(@fecha, t.fecha), updated_at = SYSUTCDATETIME()
       WHEN NOT MATCHED THEN
         INSERT (id, nro_viaje, registro_tipo, tipo, legajo_chofer, chofer,
-                patente_tractor, importe, cantidad, cantidad_cormvi)
+                patente_tractor, fecha, importe, cantidad, cantidad_cormvi)
         VALUES (@id, @nro_viaje, @registro_tipo, @tipo, @legajo_chofer, @chofer,
-                @patente_tractor, 0, 0, 0);
+                @patente_tractor, @fecha, 0, 0, 0);
     `)
 
-    console.log(`[GastosViaje] 🏁 Viaje ${nroViaje} finalizado por el chofer (legajo ${legajo})`)
+    console.log(`[GastosViaje] 🏁 Viaje ${nroViaje} finalizado por el chofer (legajo ${legajo})` +
+                (llegada ? ` · llegó el ${llegada}` : ' · sin fecha declarada'))
     res.json({
       success: true,
-      data: { nroViaje, legajoChofer: legajo, finalizada: true },
+      data: { nroViaje, legajoChofer: legajo, finalizada: true, fechaLlegada: llegada || null },
     })
   } catch (error: any) {
     return dbError(res, error, 'finalizar la hoja de ruta', true)
