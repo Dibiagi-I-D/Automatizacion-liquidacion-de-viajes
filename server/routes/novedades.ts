@@ -10,14 +10,45 @@ const router = Router()
  * ════════════════════════════════════════════════════════════════════
  *
  * ⚠️ DIBIAG es la base PRODUCTIVA de Softland. La única escritura autorizada en
- * este router es el alta de una OT (POST /), y está acotada a insertar UNA fila
- * en USR_ORTRAH. No hay UPDATE ni DELETE, y no se toca ninguna otra tabla.
+ * este router es el alta de una OT (POST /), acotada a insertar UNA fila en
+ * USR_ORTRAH y UNA en USR_ORTRAI, en la misma transacción. No hay UPDATE ni
+ * DELETE, y no se toca ninguna otra tabla.
+ *
+ * POR QUÉ TAMBIÉN LA LÍNEA
+ * En Softland una orden son dos cosas: la cabecera (USR_ORTRAH) y la tarea
+ * (USR_ORTRAI). La tarea la genera sola la regla GRTQVE del contexto IDORTR,
+ * pero esa regla corre en la PANTALLA del ERP, no en la base: insertando
+ * directo, la orden quedaba sin tarea y el sector no la veía. Pasó con las
+ * OT 26187 y 26188, que estuvieron un día así hasta que alguien las abrió en
+ * Softland. Por eso acá se replica lo que hace la regla.
  *
  * Las OT que origina un chofer se reconocen por USR_ORTRAH_SECTOR = 26, que en
  * USR_ORTRSE es el sector "CHOFER". Para la app siempre es el mismo, así que no
  * se le pregunta al chofer.
  */
 const SECTOR_SOLICITA_CHOFER = 26
+
+/**
+ * Sector y destino de la tarea. La regla GRTQVE los fija así cuando la orden
+ * es sobre una unidad, que es siempre el caso de una novedad de chofer:
+ * sector 17 de USR_ORTRSE, destino "INTERNO".
+ */
+const SECTOR_DESTINO_TAREA = 17
+const DESTINO_TAREA = 'INTERNO'
+
+/**
+ * Observación de la tarea. Es el texto que administración le puso a mano a las
+ * dos primeras órdenes de la app (26187 y 26188), y describe bien el caso: el
+ * chofer reporta la novedad desde la ruta, no desde el taller.
+ */
+const OBSERVACION_TAREA = 'En Viaje'
+
+/**
+ * Interruptor de emergencia. Si algo saliera mal con la línea en producción,
+ * se pone NOVEDADES_CREAR_TAREA=false y la app vuelve a crear solo la
+ * cabecera, sin redeployar. La orden queda como antes: incompleta pero viva.
+ */
+const CREAR_TAREA = process.env.NOVEDADES_CREAR_TAREA !== 'false'
 
 /** Usuario con el que la app figura en Softland, para distinguir estas altas. */
 const USUARIO_APP = 'APPCHOF'
@@ -604,10 +635,79 @@ router.post('/', async (req: Request, res: Response) => {
           'N', 'USR_ORTRAH'
         );
 
+        -- ── La tarea (USR_ORTRAI) ──────────────────────────────────
+        -- Lo que en la pantalla de Softland arma sola la regla GRTQVE del
+        -- contexto IDORTR (ítem 9). Los valores se leen de la cabecera recién
+        -- insertada, así no hay forma de que difieran.
+        --
+        -- ⚠️ El trigger InsUSR_ORTRAI tiene una rama que genera movimientos de
+        -- stock (STRMVH/STRMVI) y modifica existencias (STRMVK) cuando la
+        -- línea entra con TARFIN='S' y CANTNE<>0. Una tarea recién creada no
+        -- lleva materiales: TARFIN='N' y CANTNE=0 van explícitos justamente
+        -- para que esa rama no se active nunca desde acá.
+        ${CREAR_TAREA ? `
+        INSERT INTO USR_ORTRAI (
+          USR_ORTRAI_ORTRAH_NROFOR, USR_ORTRAI_IDINTI,
+          USR_ORTRAI_CODEMP,  USR_ORTRAI_OPERAD,  USR_ORTRAI_TRAREA,
+          USR_ORTRAI_OBSERV,
+          USR_ORTRAI_FECORD,  USR_ORTRAI_FECINI,  USR_ORTRAI_FECFIN,
+          USR_ORTRAI_HORAIN,  USR_ORTRAI_HORAFI,
+          USR_ORTRAI_PATENT,  USR_ORTRAI_NROINT,  USR_ORTRAI_KMUNID,
+          USR_ORTRAI_CODMAR,  USR_ORTRAI_SECINV,  USR_ORTRAI_RESPOT,
+          USR_ORTRAI_OPETAR,  USR_ORTRAI_NOMEMP,  USR_ORTRAI_USRALT,
+          USR_ORTRAI_REGIST,  USR_ORTRAI_PRIURG,
+          USR_ORTRAI_SECDES,  USR_ORTRAI_DETDES,
+          USR_ORTRAI_TARABI,  USR_ORTRAI_TARFIN,  USR_ORTRAI_PROCES,
+          USR_ORTRAI_TARTER,  USR_ORTRAI_OTMODI,  USR_ORTRAI_OTCLOS,
+          USR_ORTRAI_TARPOS,  USR_ORTRAI_FECPOS,  USR_ORTRAI_HORPOS,
+          USR_ORTRAI_HOCIOT,  USR_ORTRAI_FCCIOT,
+          USR_ORTRAI_SERVICE, USR_ORTRAI_TIPSER,
+          USR_ORTRAI_CANMAT,  USR_ORTRAI_CANTNE,  USR_ORTRAI_PRECIO,
+          USR_ORTRAI_CAMSEC,  USR_ORTRAI_STOCKS,  USR_ORTRAI_STOCKR,
+          USR_ORTRAI_STOCKE,  USR_ORTRAI_NRFOST,  USR_ORTRAI_SECTOR,
+          USR_ORTRAI_NROINC,  USR_ORTRAI_TIPPR2,  USR_ORTRAI_MATER2,
+          USR_ORTRAI_UNIMED,  USR_ORTRAI_DEPOSI,  USR_ORTRAI_SECDEP,
+          USR_OR_FECALT,      USR_OR_FECMOD,      USR_OR_USERID,
+          USR_OR_ULTOPR,      USR_OR_DEBAJA,      USR_OR_OALIAS
+        )
+        SELECT
+          h.USR_ORTRAH_NROFOR, 1,
+          h.USR_ORTRAH_CODEMP, h.USR_ORTRAH_OPERAD, h.USR_ORTRAH_NOVEDA,
+          @observ,
+          -- FECORD/FECINI son del día de la orden; FECFIN, FCCIOT y FECPOS
+          -- quedan en el día en que se crea la tarea, como en la 26188
+          h.USR_ORTRAH_FECORD, h.USR_ORTRAH_FECORD, CAST(GETDATE() AS date),
+          h.USR_ORTRAH_HORAOT, '',
+          h.USR_ORTRAH_INTERN, h.USR_ORTRAH_NROINT, h.USR_ORTRAH_KMUNID,
+          h.USR_ORTRAH_CODMAR, h.USR_ORTRAH_SECINV, h.USR_ORTRAH_NOMENC,
+          h.USR_ORTRAH_NOMEMP, '', h.USR_ORTRAH_USRALT,
+          h.USR_ORTRAH_USRALT, ISNULL(h.USR_ORTRAH_PRIURG, 'N'),
+          @secdes, @detdes,
+          'S', 'N', 'N',
+          'N', 'S', 'N',
+          'N', CAST(GETDATE() AS date), '',
+          '', CAST(GETDATE() AS date),
+          'N', '',
+          -- Sin materiales. CANTNE es texto y va vacío, igual que en la 26188:
+          -- es lo que deja apagada la rama de stock del trigger.
+          0, '', 0,
+          0, 0, 0,
+          0, 0, 0,
+          '', '      ', '',
+          '', '01', '0',
+          GETDATE(), GETDATE(), @usuario,
+          'A', 'N', 'USR_ORTRAI'
+        FROM USR_ORTRAH h
+        WHERE h.USR_ORTRAH_NROFOR = @nro;
+        ` : '-- creación de la tarea desactivada por NOVEDADES_CREAR_TAREA=false'}
+
       COMMIT TRANSACTION;
 
       SELECT @nro AS NroOrden;
     `, {
+      secdes:             SECTOR_DESTINO_TAREA,
+      detdes:             DESTINO_TAREA,
+      observ:             OBSERVACION_TAREA,
       codemp:             (empresaChofer || 'DIBIAG').slice(0, 10),
       operad:             legajoChofer.slice(0, 13),
       noveda:             prediagnostico.slice(0, 255),
@@ -628,7 +728,8 @@ router.post('/', async (req: Request, res: Response) => {
     const nroOrden = Number(filas[0]?.NroOrden)
 
     console.log(
-      `[Novedades] OT ${nroOrden} creada | ${sectorInvolucrado} | ${patente} (int ${nroInterno}) | ${nombreChofer}`
+      `[Novedades] OT ${nroOrden} creada | ${sectorInvolucrado} | ${patente} (int ${nroInterno}) | ${nombreChofer}` +
+      (CREAR_TAREA ? ' | con tarea' : ' | SIN tarea (NOVEDADES_CREAR_TAREA=false)')
     )
 
     res.status(201).json({
