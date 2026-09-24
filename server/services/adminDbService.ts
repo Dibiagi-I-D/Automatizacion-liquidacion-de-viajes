@@ -194,8 +194,25 @@ class AdminDbService {
       END
     `)
 
+    // ── Migración 005: los dos períodos, corregibles ─────────────────
+    // La cabecera define el período de TODAS las líneas (es lo que hace
+    // Softland). Estas columnas son la excepción: si una línea puntual tiene
+    // que ir con otro período, se fija acá. NULL = heredar de la cabecera.
+    await pool.request().batch(`
+      IF COL_LENGTH('dbo.cabecera_viaje', 'periodo') IS NULL
+        ALTER TABLE dbo.cabecera_viaje ADD periodo INT NULL;
+    `)
+    await pool.request().batch(`
+      IF COL_LENGTH('dbo.gastos_viaje', 'periodo_liquidar') IS NULL
+        ALTER TABLE dbo.gastos_viaje ADD periodo_liquidar NVARCHAR(6) NULL;
+    `)
+    await pool.request().batch(`
+      IF COL_LENGTH('dbo.gastos_viaje', 'periodo') IS NULL
+        ALTER TABLE dbo.gastos_viaje ADD periodo INT NULL;
+    `)
+
     this.schemaReady = true
-    console.log('✅ [AdminDB] Esquema verificado (gastos_viaje, aprobaciones_viaje, foto, registro_tipo, cabecera_viaje)')
+    console.log('✅ [AdminDB] Esquema verificado (gastos_viaje, aprobaciones_viaje, foto, registro_tipo, cabecera_viaje, periodos)')
   }
 
   /** Request listo para usar, con el esquema ya garantizado. */

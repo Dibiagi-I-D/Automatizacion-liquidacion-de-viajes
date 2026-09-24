@@ -52,7 +52,7 @@ interface Cabecera {
   salida: ValorCabecera
   llegada: ValorCabecera
   periodoLiquidar: ValorCabecera
-  periodo: number
+  periodo: ValorCabecera
   cajaCamion: number | null
   actualizadoPor: string | null
   actualizadoAt: string | null
@@ -122,6 +122,9 @@ interface FilaCormvi extends CormviRecord {
   _descripcion: string
   _fechaTicket: string
   _formalidad: string
+  /** La línea lleva un período propio en vez de heredar el de la cabecera */
+  _periodoPropio: boolean
+  _periodoCargaPropio: boolean
 }
 
 /**
@@ -358,7 +361,7 @@ export default function AdminViajeDetalle() {
   }
 
   /** Corrige la cabecera. Devuelve el mensaje de error, o null si salió bien. */
-  const guardarCabecera = async (cambios: { salida?: string; llegada?: string; periodoLiquidar?: string }) => {
+  const guardarCabecera = async (cambios: { salida?: string; llegada?: string; periodoLiquidar?: string; periodo?: string }) => {
     try {
       const res = await fetch(`${API_URL}/gastos-viaje/${nroViaje}/cabecera`, {
         method: 'PUT',
@@ -967,8 +970,20 @@ export default function AdminViajeDetalle() {
                           {formatImporte(reg.VIRT_TOTLIN)}
                         </td>
 
-                        {/* De la cabecera: se corrige arriba, no fila por fila */}
-                        <td className="py-3.5 px-4 text-gray-300" title="Viene de la cabecera de la rendición">{reg.USR_CORMVI_PERLIQ}</td>
+                        {/* Viene de la cabecera. Se puede pisar en esta línea
+                            puntual si hiciera falta; el lápiz edita solo esta fila. */}
+                        <Celda
+                          {...celda('periodoLiquidar')}
+                          valor={reg.USR_CORMVI_PERLIQ}
+                          className={reg._periodoPropio ? 'text-amber-300' : 'text-gray-300'}
+                          render={(v) => (
+                            <span title={reg._periodoPropio
+                              ? 'Esta línea lleva un período a liquidar propio, distinto al de la cabecera'
+                              : 'Viene de la cabecera de la rendición'}>
+                              {v}{reg._periodoPropio && <span className="text-amber-500 ml-1">•</span>}
+                            </span>
+                          )}
+                        />
 
                         {/* Vacía en el 99,96% de las líneas reales de Softland */}
                         <td className="py-3.5 px-4 text-gray-700" title="En Softland esta columna va vacía">—</td>
@@ -1014,10 +1029,21 @@ export default function AdminViajeDetalle() {
                           {reg.CORMVI_CANTID}
                         </td>
 
-                        {/* De la cabecera: período numérico y fecha de llegada */}
-                        <td className="py-3.5 px-4 text-right text-gray-300 tabular-nums" title="Mes de carga. Viene de la cabecera.">
-                          {reg.USR_CORMVI_PERIOD || ''}
-                        </td>
+                        {/* Igual que el de liquidar: hereda de la cabecera y se
+                            puede pisar en esta fila */}
+                        <Celda
+                          {...celda('periodo')}
+                          valor={reg.USR_CORMVI_PERIOD || ''}
+                          alinear="right"
+                          className={reg._periodoCargaPropio ? 'text-amber-300' : 'text-gray-300'}
+                          render={(v) => (
+                            <span className="tabular-nums" title={reg._periodoCargaPropio
+                              ? 'Esta línea lleva un período propio, distinto al de la cabecera'
+                              : 'Mes de carga. Viene de la cabecera.'}>
+                              {v}{reg._periodoCargaPropio && <span className="text-amber-500 ml-1">•</span>}
+                            </span>
+                          )}
+                        />
                         <td className="py-3.5 px-4 text-gray-300" title="Fecha de llegada del viaje. Se corrige en la cabecera.">
                           {fechaCorta(reg.USR_CORMVI_FCHLLE) || <span className="text-gray-700">—</span>}
                         </td>
@@ -1345,12 +1371,12 @@ function CabeceraRendicion({
   cabecera, onGuardar,
 }: {
   cabecera: Cabecera
-  onGuardar: (cambios: { salida?: string; llegada?: string; periodoLiquidar?: string }) => Promise<string | null>
+  onGuardar: (cambios: { salida?: string; llegada?: string; periodoLiquidar?: string; periodo?: string }) => Promise<string | null>
 }) {
   const [guardando, setGuardando] = useState<string | null>(null)
   const [error, setError] = useState('')
 
-  const aplicar = async (campo: 'salida' | 'llegada' | 'periodoLiquidar', valor: string) => {
+  const aplicar = async (campo: 'salida' | 'llegada' | 'periodoLiquidar' | 'periodo', valor: string) => {
     setGuardando(campo)
     setError('')
     const err = await onGuardar({ [campo]: valor })
@@ -1361,7 +1387,7 @@ function CabeceraRendicion({
     setGuardando(null)
   }
 
-  const hayCorreccion = [cabecera.salida, cabecera.llegada, cabecera.periodoLiquidar]
+  const hayCorreccion = [cabecera.salida, cabecera.llegada, cabecera.periodoLiquidar, cabecera.periodo]
     .some(v => v.origen === 'manual')
 
   return (
@@ -1409,20 +1435,21 @@ function CabeceraRendicion({
           guardando={guardando === 'periodoLiquidar'}
           onAplicar={(v) => aplicar('periodoLiquidar', v)}
         />
-        <div className="space-y-3">
-          <div>
-            <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Período</p>
-            <p className="text-sm text-gray-300 font-mono" title="Mes en que se carga la rendición">
-              {cabecera.periodo || '—'}
-            </p>
-          </div>
-          <div>
-            <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Caja camión</p>
-            <p className="text-sm text-gray-300 font-mono" title="Valor vigente a la fecha de salida (USR_CAJCAM)">
-              {cabecera.cajaCamion ?? '—'}
-            </p>
-          </div>
-        </div>
+        <CampoCabecera
+          label="Período"
+          valor={cabecera.periodo}
+          tipo="text"
+          placeholder="AAAAMM"
+          guardando={guardando === 'periodo'}
+          onAplicar={(v) => aplicar('periodo', v)}
+        />
+      </div>
+
+      <div className="mt-4 pt-4 border-t border-white/[0.06] flex items-baseline gap-2">
+        <p className="text-[10px] text-gray-600 uppercase tracking-wider">Caja camión</p>
+        <p className="text-sm text-gray-300 font-mono" title="Valor vigente a la fecha de salida (USR_CAJCAM)">
+          {cabecera.cajaCamion ?? '—'}
+        </p>
       </div>
 
     </div>

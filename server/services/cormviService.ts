@@ -51,8 +51,12 @@ export interface Cabecera {
   salida: ValorCabecera<string>            // YYYY-MM-DD
   llegada: ValorCabecera<string>           // YYYY-MM-DD
   periodoLiquidar: ValorCabecera<string>   // YYYYMM
-  /** Mes en que se carga la rendición: en Softland coincide en el 98,4%. */
-  periodo: number
+  /**
+   * Mes en que se CARGA la rendición (USR_CORMVI_PERIOD), distinto del de
+   * pago: en las líneas reales coinciden el 55% y difieren el 45%, siempre
+   * con el de pago igual o posterior.
+   */
+  periodo: ValorCabecera<string>
   /** USR_CAJCAM vigente a la fecha de salida (regla 45). */
   cajaCamion: number | null
   actualizadoPor: string | null
@@ -67,9 +71,9 @@ function aISO(v: any): string | null {
   return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null
 }
 
-function periodoActual(): number {
+function periodoActual(): string {
   const hoy = new Date()
-  return hoy.getFullYear() * 100 + (hoy.getMonth() + 1)
+  return `${hoy.getFullYear()}${String(hoy.getMonth() + 1).padStart(2, '0')}`
 }
 
 /**
@@ -108,7 +112,7 @@ export async function obtenerCabecera(nroViaje: number, empresaPreferida = ''): 
   const rq = await adminDb.request()
   rq.input('nro', sql.Int, nroViaje)
   const override = (await rq.query(`
-    SELECT fecha_salida, fecha_llegada, periodo_liquidar, actualizado_por, updated_at
+    SELECT fecha_salida, fecha_llegada, periodo_liquidar, periodo, actualizado_por, updated_at
     FROM dbo.cabecera_viaje WHERE nro_viaje = @nro
   `)).recordset[0]
 
@@ -220,7 +224,9 @@ export async function obtenerCabecera(nroViaje: number, empresaPreferida = ''): 
     salida,
     llegada,
     periodoLiquidar,
-    periodo: periodoActual(),
+    periodo: override?.periodo
+      ? { valor: String(override.periodo), origen: 'manual' }
+      : { valor: periodoActual(), origen: 'calculado' },
     cajaCamion,
     actualizadoPor: override?.actualizado_por || null,
     actualizadoAt: override?.updated_at ? new Date(override.updated_at).toISOString() : null,
@@ -234,6 +240,7 @@ export interface CorreccionCabecera {
   salida?: string | null
   llegada?: string | null
   periodoLiquidar?: string | null
+  periodo?: string | null
 }
 
 export async function guardarCorreccionCabecera(nroViaje: number, c: CorreccionCabecera, usuario: string) {
@@ -256,6 +263,7 @@ export async function guardarCorreccionCabecera(nroViaje: number, c: CorreccionC
   campo('fecha_salida', sql.Date, c.salida)
   campo('fecha_llegada', sql.Date, c.llegada)
   campo('periodo_liquidar', sql.NVarChar(6), c.periodoLiquidar)
+  campo('periodo', sql.Int, c.periodo)
 
   if (sets.length === 0) return
 
@@ -315,6 +323,9 @@ export interface FilaCormvi extends CormviRecord {
   _descripcion: string
   _fechaTicket: string
   _formalidad: string
+  /** La línea lleva un período propio en vez del de la cabecera */
+  _periodoPropio: boolean
+  _periodoCargaPropio: boolean
 }
 
 export interface GastoParaCormvi {
@@ -334,6 +345,9 @@ export interface GastoParaCormvi {
   patenteTractor: string
   rendicion: string
   tieneFoto: boolean
+  /** Excepciones de la línea. En null hereda el período de la cabecera. */
+  periodoLiquidar?: string | null
+  periodo?: number | null
 }
 
 /** Moneda tal como la guarda Softland en CORMVI_COFLIS (no el código ISO). */
@@ -357,7 +371,8 @@ export function gastoAFilaCormvi(g: GastoParaCormvi, cab: Cabecera): FilaCormvi 
     USR_CORMVI_CANTID: 1,
     USR_CORMVI_PRECIO: importe,
     VIRT_TOTLIN:       importe,
-    USR_CORMVI_PERLIQ: cab.periodoLiquidar.valor || '',
+    // De la cabecera, salvo que esta línea puntual lleve otro
+    USR_CORMVI_PERLIQ: g.periodoLiquidar || cab.periodoLiquidar.valor || '',
     // Vacía en el 99,96% de las líneas reales: el detalle del ticket no viaja
     CORMVI_TEXTOS:     '',
     // Softland copia legajo, empresa y nombre de la CABECERA a cada línea
@@ -379,7 +394,7 @@ export function gastoAFilaCormvi(g: GastoParaCormvi, cab: Cabecera): FilaCormvi 
     USR_CORMVI_CAJCAM: cab.cajaCamion,
     CORMVI_PRECIO:     importe,
     CORMVI_CANTID:     1,
-    USR_CORMVI_PERIOD: cab.periodo,
+    USR_CORMVI_PERIOD: Number(g.periodo || cab.periodo.valor) || 0,
     USR_CORMVI_FCHLLE: cab.llegada.valor,
 
     _gastoId:     g.id,
@@ -388,5 +403,7 @@ export function gastoAFilaCormvi(g: GastoParaCormvi, cab: Cabecera): FilaCormvi 
     _descripcion: g.descripcion || '',
     _fechaTicket: g.fecha ? String(g.fecha).slice(0, 10) : '',
     _formalidad:  g.formalidad || 'INFORMAL',
+    _periodoPropio:      !!g.periodoLiquidar,
+    _periodoCargaPropio: !!g.periodo,
   }
 }

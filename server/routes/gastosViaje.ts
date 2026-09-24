@@ -37,6 +37,13 @@ interface Gasto {
   empresaChofer: string      // EMPRESA LEGAJO (ej: DIBIAG)
   patenteTractor: string     // TRACTOR
   rendicion: string          // RENDICION
+  /**
+   * Los dos períodos son de la CABECERA: todas las líneas del viaje llevan el
+   * mismo par. Estos campos son la excepción por si una línea puntual tiene
+   * que ir distinta; en null (lo normal) hereda el de la cabecera.
+   */
+  periodoLiquidar: string | null   // USR_CORMVI_PERLIQ (AAAAMM)
+  periodo: number | null           // USR_CORMVI_PERIOD (AAAAMM)
   createdAt: string
   updatedAt?: string | null
   tieneFoto: boolean         // hay imagen del ticket adjunta
@@ -75,6 +82,8 @@ function rowToGasto(r: any): Gasto {
     empresaChofer:         r.empresa_chofer || '',
     patenteTractor:        r.patente_tractor || '',
     rendicion:             r.rendicion || '',
+    periodoLiquidar:       r.periodo_liquidar ? String(r.periodo_liquidar).trim() : null,
+    periodo:               r.periodo === null || r.periodo === undefined ? null : Number(r.periodo),
     createdAt:             r.created_at ? new Date(r.created_at).toISOString() : '',
     updatedAt:             r.updated_at ? new Date(r.updated_at).toISOString() : null,
     tieneFoto:             Number(r.tiene_foto) === 1,
@@ -120,6 +129,7 @@ const COLS = [
   'formalidad', 'codigo_proveedor', 'importe', 'cantidad', 'cantidad_cormvi',
   'coeficiente_viaje', 'valor_item_seleccionado', 'valor_caja_camion', 'descripcion',
   'chofer', 'legajo_chofer', 'empresa_chofer', 'patente_tractor', 'rendicion',
+  'periodo_liquidar', 'periodo',
   'created_at', 'updated_at', 'foto_mime', 'foto_subida_at',
 ]
 
@@ -301,6 +311,22 @@ const CAMPOS_EDITABLES: Record<string, { col: string; type: any; parse: (v: any)
   empresaChofer:         { col: 'empresa_chofer',          type: sql.NVarChar(64),   parse: txt },
   patenteTractor:        { col: 'patente_tractor',         type: sql.NVarChar(64),   parse: txt },
   rendicion:             { col: 'rendicion',               type: sql.NVarChar(64),   parse: txt },
+  // Vacío = vuelve a heredar el período de la cabecera
+  periodoLiquidar:       { col: 'periodo_liquidar',        type: sql.NVarChar(6),    parse: periodoOrNull },
+  periodo:               { col: 'periodo',                 type: sql.Int,            parse: periodoOrNull },
+}
+
+/**
+ * Un período es AAAAMM o nada. Se valida acá porque es el campo que decide en
+ * qué mes se le paga al chofer: un 202613 tendría que saltar antes de grabarse.
+ */
+function periodoOrNull(v: any): string | null {
+  const s = txt(v)
+  if (!s) return null
+  if (!/^\d{4}(0[1-9]|1[0-2])$/.test(s)) {
+    throw Object.assign(new Error(`"${s}" no es un período válido: va AAAAMM, por ejemplo 202609`), { statusCode: 400 })
+  }
+  return s
 }
 
 router.put('/:id', async (req: Request, res: Response) => {
@@ -324,7 +350,12 @@ router.put('/:id', async (req: Request, res: Response) => {
 
     for (const [key, def] of Object.entries(CAMPOS_EDITABLES)) {
       if (req.body[key] !== undefined) {
-        rq.input(def.col, def.type, def.parse(req.body[key]))
+        try {
+          rq.input(def.col, def.type, def.parse(req.body[key]))
+        } catch (err: any) {
+          // Un valor mal escrito es culpa de quien lo mandó, no de la base
+          return res.status(err.statusCode || 400).json({ success: false, error: err.message })
+        }
         sets.push(`${def.col} = @${def.col}`)
       }
     }
@@ -594,14 +625,14 @@ router.put('/:nroViaje/cabecera', requiereSesionAdmin, async (req: Request, res:
     return res.status(400).json({ success: false, error: 'Número de viaje inválido' })
   }
 
-  const { salida, llegada, periodoLiquidar } = req.body
+  const { salida, llegada, periodoLiquidar, periodo } = req.body
   const esFecha = (v: any) => v === undefined || v === null || v === '' || /^\d{4}-\d{2}-\d{2}$/.test(String(v))
+  const esPeriodo = (v: any) => v === undefined || v === null || v === '' || /^\d{4}(0[1-9]|1[0-2])$/.test(String(v))
 
   if (!esFecha(salida) || !esFecha(llegada)) {
     return res.status(400).json({ success: false, error: 'Las fechas van con formato AAAA-MM-DD' })
   }
-  if (periodoLiquidar !== undefined && periodoLiquidar !== null && periodoLiquidar !== ''
-      && !/^\d{4}(0[1-9]|1[0-2])$/.test(String(periodoLiquidar))) {
+  if (!esPeriodo(periodoLiquidar) || !esPeriodo(periodo)) {
     return res.status(400).json({ success: false, error: 'El período va con formato AAAAMM (ej. 202609)' })
   }
 
@@ -623,7 +654,7 @@ router.put('/:nroViaje/cabecera', requiereSesionAdmin, async (req: Request, res:
       return res.status(400).json({ success: false, error: 'La fecha de llegada no puede ser posterior a hoy' })
     }
 
-    await guardarCorreccionCabecera(nroViaje, { salida, llegada, periodoLiquidar }, quien)
+    await guardarCorreccionCabecera(nroViaje, { salida, llegada, periodoLiquidar, periodo }, quien)
     const cabecera = await obtenerCabecera(nroViaje)
     console.log(`[Cabecera] Viaje ${nroViaje} corregido por ${quien}`)
     res.json({ success: true, data: cabecera })
