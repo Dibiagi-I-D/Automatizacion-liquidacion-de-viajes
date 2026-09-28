@@ -611,7 +611,7 @@ router.post('/', async (req: Request, res: Response) => {
           USR_ORTRAH_NOMEMP,  USR_ORTRAH_DETDES,  USR_ORTRAH_CODMAR,  USR_ORTRAH_REGIST,
           USR_ORTRAH_USRALT,  USR_ORTRAH_KMSUGE,  USR_ORTRAH_RESPON,  USR_ORTRAH_CHOFER,
           USR_ORTRAH_INTALT,  USR_ORTRAH_SERVICE, USR_ORTRAH_TIPSER,  USR_ORTRAH_PRIURG,
-          USR_ORTRAH_KMPRSR,
+          USR_ORTRAH_KMPRSR,  USR_ORTRAH_VIAJE,
           USR_OR_FECALT,      USR_OR_FECMOD,      USR_OR_USERID,      USR_OR_ULTOPR,
           USR_OR_DEBAJA,      USR_OR_OALIAS
         )
@@ -630,7 +630,10 @@ router.post('/', async (req: Request, res: Response) => {
           @nombreResponsable, '', @codmar, @usuario,
           @usuario, @kmsuge, @respon, @chofer,
           @intern, 'N', NULL, 'N',
-          0,
+          -- 'S' marca que la novedad la reportó un chofer en viaje. Es el valor
+          -- que pidió administración para poder distinguirlas; hasta ahora la
+          -- columna venía en NULL (26.193 filas) o en 'N' (91).
+          0, 'S',
           GETDATE(), GETDATE(), @usuario, 'A',
           'N', 'USR_ORTRAH'
         );
