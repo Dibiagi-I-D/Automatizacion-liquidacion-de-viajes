@@ -1,8 +1,9 @@
 import { useState, FormEvent, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { FaTruck, FaSpinner, FaSearch, FaTimes, FaCheck } from 'react-icons/fa'
+import { FaTruck, FaSpinner, FaSearch, FaTimes, FaCheck, FaBell, FaExclamationCircle } from 'react-icons/fa'
 import * as api from '../api/client'
+import { useAvisos } from '../useAvisos'
 
 interface Chofer {
   'EsChofer?': string;
@@ -26,6 +27,12 @@ interface Tractor {
 export default function Login() {
   const navigate = useNavigate()
   const { login } = useAuth()
+  // Avisos de la app (ver avisos.ts). Si hay alguno bloqueante sin leer, el
+  // panel se abre solo y no deja entrar hasta que lo cierren.
+  const { avisos, sinLeer, hayBloqueante, marcarTodosVistos } = useAvisos()
+  const [panelAbierto, setPanelAbierto] = useState(false)
+  const panelVisible = hayBloqueante || panelAbierto
+
   const [legajo, setLegajo] = useState('')
   const [interno, setInterno] = useState('')
   const [loading, setLoading] = useState(false)
@@ -220,6 +227,11 @@ export default function Login() {
     e.preventDefault()
     setError('')
 
+    // Con un aviso importante sin leer no se entra: el panel ya está abierto
+    // encima, así que esto es el cinturón por si llegara un submit igual
+    // (Enter en un campo, por ejemplo).
+    if (hayBloqueante) return
+
     if (!selectedChofer) {
       setError('Por favor seleccioná un chofer de la lista')
       return
@@ -276,6 +288,76 @@ export default function Login() {
           Sistema de rendiciones
         </p>
       </div>
+
+      {/* Avisos de la app. El bloqueante se abre solo y tapa la pantalla; el
+          resto quedan detrás de la campanita para releerlos cuando quieran. */}
+      {avisos.length > 0 && (
+        <div className="w-full max-w-md mb-4">
+          <button
+            type="button"
+            onClick={() => setPanelAbierto((v) => !v)}
+            className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition
+              ${sinLeer.length > 0
+                ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40'
+                : 'bg-white/[0.03] text-gray-400 border border-white/[0.06]'}`}
+          >
+            <FaBell className={sinLeer.length > 0 ? 'animate-pulse' : ''} />
+            {sinLeer.length > 0 ? 'Hay un aviso importante' : 'Ver avisos'}
+          </button>
+        </div>
+      )}
+
+      {panelVisible && (
+        <>
+          {hayBloqueante && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40" />
+          )}
+          <div className={`w-full max-w-md glass-card p-6 mb-4 animate-slide-up
+            ${hayBloqueante ? 'relative z-50 border border-amber-500/40' : ''}`}>
+            {avisos.map((aviso) => (
+              <div key={aviso.id} className="mb-5 last:mb-0">
+                <div className="flex items-start gap-2.5 mb-3">
+                  <FaExclamationCircle className="text-amber-400 mt-0.5 shrink-0" />
+                  <div>
+                    <h2 className="text-white font-semibold leading-tight">{aviso.titulo}</h2>
+                    <p className="text-gray-500 text-xs mt-0.5">{aviso.fecha}</p>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {aviso.detalle.map((linea, i) => {
+                    // Los renglones que terminan en ":" son encabezados de bloque
+                    // y los que arrancan con "-" son viñetas. El resto, texto suelto.
+                    if (linea.trim().endsWith(':') && linea.trim().length < 60) {
+                      return (
+                        <p key={i} className="text-amber-300/90 text-xs font-semibold tracking-wide pt-1">
+                          {linea}
+                        </p>
+                      )
+                    }
+                    if (linea.trim().startsWith('-')) {
+                      return (
+                        <p key={i} className="text-gray-300 text-sm leading-relaxed pl-3 border-l-2 border-white/10">
+                          {linea.replace(/^\s*-\s*/, '')}
+                        </p>
+                      )
+                    }
+                    return (
+                      <p key={i} className="text-gray-300 text-sm leading-relaxed">{linea}</p>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => { marcarTodosVistos(); setPanelAbierto(false) }}
+              className="btn-primary w-full mt-5"
+            >
+              Entendido
+            </button>
+          </div>
+        </>
+      )}
 
       {/* Formulario */}
       <div className="w-full max-w-md glass-card p-6 animate-slide-up" style={{ animationDelay: '0.1s' }}>
