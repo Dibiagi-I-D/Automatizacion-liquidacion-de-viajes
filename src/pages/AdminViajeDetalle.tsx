@@ -7,7 +7,7 @@ import {
   FaTimes, FaPen, FaSave, FaCopy, FaTrash, FaUndo, FaCalendarAlt
 } from 'react-icons/fa'
 
-import { totalesPorMoneda, normalizarPais, MONEDAS, BANDERAS } from '../types'
+import { totalesPorMoneda, normalizarPais, MONEDAS, MONEDAS_SOFTLAND, BANDERAS, NOMBRES_PAIS, ORDEN_PAISES } from '../types'
 import { resolverProveedor, cargarProveedores } from '../proveedores'
 import TotalesPorMoneda from '../components/TotalesPorMoneda'
 
@@ -251,6 +251,26 @@ function fechaCorta(v: string | null | undefined): string {
   const [a, m, d] = String(v).slice(0, 10).split('-')
   return d ? `${d}/${m}/${a}` : String(v)
 }
+
+/**
+ * Coeficiente y Moneda no son dos datos: los dos salen del PAÍS del gasto.
+ * `CORMVI_COFLIS` es MONEDAS_SOFTLAND[pais] y la columna Moneda es MONEDAS[pais],
+ * así que editar cualquiera de las dos escribe `pais` y las mueve juntas. Tener
+ * un coeficiente editable por separado dejaría la fila contradiciéndose: un peaje
+ * marcado en CLP liquidándose en ARS.
+ *
+ * Cada lista muestra el código de SU columna para que el admin vea lo que va a
+ * quedar en esa celda, no el de la otra.
+ */
+const OPCIONES_COFLIS = ORDEN_PAISES.map(p => ({
+  v: p,
+  label: `${MONEDAS_SOFTLAND[p]} — ${NOMBRES_PAIS[p]}`,
+}))
+
+const OPCIONES_MONEDA = ORDEN_PAISES.map(p => ({
+  v: p,
+  label: `${BANDERAS[p]} ${MONEDAS[p]} — ${NOMBRES_PAIS[p]}`,
+}))
 
 export default function AdminViajeDetalle() {
   const { nroViaje: nroViajeParam } = useParams<{ nroViaje: string }>()
@@ -837,13 +857,13 @@ export default function AdminViajeDetalle() {
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[180px]">Cód. Producto Original</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[140px]">Tipo de Concepto</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[110px]">Concepto</th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[110px]">Coeficiente</th>
+                    <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[110px]" title="Moneda con la que Softland liquida la línea. Sale del país del gasto: al cambiarla cambia también la columna Moneda.">Coeficiente</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[90px]">Informal</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[90px]">Cantidad</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Precio</th>
                     {/* Columna solo informativa: NO forma parte de COLUMNAS_CORMVI,
                         así que no se copia ni se exporta. */}
-                    <th className="text-left py-3 px-4 text-gray-500 font-bold text-xs uppercase tracking-wider min-w-[96px]">Moneda</th>
+                    <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[96px]" title="País y moneda del gasto. No se copia a Softland, pero define la columna Coeficiente.">Moneda</th>
                     <th className="text-right py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[120px]">Total</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[150px]">Período a Liquidar</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-bold text-xs uppercase tracking-wider min-w-[160px]">Observaciones</th>
@@ -930,7 +950,15 @@ export default function AdminViajeDetalle() {
                         {/* Constantes del formato CORMVI — no se editan */}
                         <td className="py-3.5 px-4 text-purple-400 font-semibold" title="Constante del formato CORMVI">{reg.CORMVI_TIPCPT}</td>
                         <td className="py-3.5 px-4 text-purple-300 font-semibold" title="Constante del formato CORMVI">{reg.CORMVI_CODCPT}</td>
-                        <td className="py-3.5 px-4 text-gray-500" title="Constante del formato CORMVI">{reg.CORMVI_COFLIS}</td>
+                        {/* Deriva del país — ver OPCIONES_COFLIS */}
+                        <Celda
+                          {...celda('pais')}
+                          valor={reg.CORMVI_COFLIS}
+                          tipo="select"
+                          opciones={OPCIONES_COFLIS}
+                          valorEdicion={normalizarPais(reg._pais)}
+                          className="text-gray-300 font-semibold"
+                        />
 
                         <Celda
                           {...celda('formalidad')}
@@ -952,18 +980,24 @@ export default function AdminViajeDetalle() {
                         <Celda {...celda('importe')}  valor={reg.USR_CORMVI_PRECIO}  tipo="number" alinear="right"
                                className="text-white font-bold" render={(v) => formatImporte(Number(v))} />
 
-                        {/* Moneda del gasto — solo para leer la tabla; no se copia */}
-                        <td className="py-3.5 px-4" title="Moneda del gasto. No se copia a Softland.">
-                          {(() => {
-                            const p = normalizarPais(reg._pais)
+                        {/* Moneda del gasto — no se copia a Softland, pero es la
+                            lectura humana del mismo país que define el Coeficiente */}
+                        <Celda
+                          {...celda('pais')}
+                          valor={reg._pais}
+                          tipo="select"
+                          opciones={OPCIONES_MONEDA}
+                          valorEdicion={normalizarPais(reg._pais)}
+                          render={(v) => {
+                            const p = normalizarPais(v)
                             return (
                               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                                 <span className="text-sm leading-none">{BANDERAS[p]}</span>
                                 <span className="text-gray-300 font-semibold">{MONEDAS[p]}</span>
                               </span>
                             )
-                          })()}
-                        </td>
+                          }}
+                        />
 
                         {/* Columna virtual: cantidad × precio, no se edita */}
                         <td className="py-3.5 px-4 text-right text-gray-400 tabular-nums" title="Cantidad × Precio">
