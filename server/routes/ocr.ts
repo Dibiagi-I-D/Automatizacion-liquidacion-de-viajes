@@ -4,48 +4,6 @@ import { PARES_VALIDOS, CONCEPTO_FALLBACK } from '../services/conceptosSoftland.
 
 const router = Router()
 
-/**
- * ════════════════════════════════════════════════════════════════════
- * CONSUMO DE TOKENS
- * ════════════════════════════════════════════════════════════════════
- *
- * Gemini devuelve en cada respuesta cuántos tokens gastó (`usageMetadata`).
- * Antes eso se descartaba, así que la única forma de saber el gasto era la
- * consola de Google Cloud — y ahí el OCR aparece mezclado con el dictado por
- * voz, que se cobra por minuto de audio y no por token.
- *
- * Medido con el endpoint countTokens de Google: una lectura de ticket son
- * ~3.242 tokens del prompt + 258 de la imagen (fijo, no depende del peso del
- * archivo) + unos 80 de respuesta.
- *
- * El acumulado es en memoria y se reinicia con el servidor: sirve para ver el
- * consumo de una jornada, no para la contabilidad del mes. Para eso está la
- * facturación de Google.
- */
-const consumo = {
-  llamadas: 0,
-  tokensEntrada: 0,
-  tokensSalida: 0,
-  desde: new Date().toISOString(),
-}
-
-function registrarConsumo(uso: any) {
-  if (!uso) return
-  consumo.llamadas += 1
-  consumo.tokensEntrada += Number(uso.promptTokenCount) || 0
-  consumo.tokensSalida += Number(uso.candidatesTokenCount) || 0
-  console.log(
-    `[OCR] Tokens: ${uso.promptTokenCount} entrada + ${uso.candidatesTokenCount} salida ` +
-    `| acumulado del servidor: ${consumo.llamadas} lecturas, ` +
-    `${consumo.tokensEntrada + consumo.tokensSalida} tokens`
-  )
-}
-
-// ─── GET /api/ocr/consumo ── Cuánto gastó el OCR desde que arrancó ───
-router.get('/consumo', (_req: Request, res: Response) => {
-  res.json({ success: true, data: consumo })
-})
-
 // Gemini 2.5 Flash — rápido, gratuito y multimodal
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
@@ -185,14 +143,14 @@ function proveedorPorEmisor(texto: string): ProveedorOCR | null {
 const esperar = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
- * POST al modelo reintentando ante fallas transitorias. Sirve para los dos.
+ * POST a Gemini reintentando ante fallas transitorias.
  *
- * 503 ("high demand"/"overloaded") y 429 (rate limit) son temporales y frecuentes
- * en horas pico. Sin reintento, el chofer ve un error y tiene que volver a sacar
- * la foto — con el costo de subida que eso implica desde la ruta. Dos reintentos
- * cortos resuelven la mayoría sin que se entere.
+ * 503 ("high demand") y 429 (rate limit) son temporales y frecuentes en horas pico.
+ * Sin reintento, el chofer ve un error y tiene que volver a sacar la foto — con el
+ * costo de subida que eso implica desde la ruta. Dos reintentos cortos resuelven
+ * la mayoría sin que se entere.
  */
-async function postearConReintento(url: string, body: any, config: any, intentos = 3) {
+async function postearAGeminiConReintento(url: string, body: any, config: any, intentos = 3) {
   let ultimoError: any
 
   for (let intento = 1; intento <= intentos; intento++) {
@@ -206,163 +164,12 @@ async function postearConReintento(url: string, body: any, config: any, intentos
       if (!esTransitorio || intento === intentos) throw error
 
       const esperaMs = 1200 * intento  // 1,2s y luego 2,4s
-      console.warn(`[OCR] El modelo respondió ${status}, reintento ${intento}/${intentos - 1} en ${esperaMs}ms`)
+      console.warn(`[OCR] Gemini respondió ${status}, reintento ${intento}/${intentos - 1} en ${esperaMs}ms`)
       await esperar(esperaMs)
     }
   }
 
   throw ultimoError
-}
-
-// ════════════════════════════════════════════════════════════════════
-// QUÉ MODELO LEE EL TICKET
-// ════════════════════════════════════════════════════════════════════
-//
-// Se puede leer con Gemini o con Claude. Los dos reciben la misma imagen y el
-// mismo prompt, y devuelven el mismo JSON: lo que sigue después —la corrección
-// del proveedor por emisor, la formalidad de los genéricos— no distingue de
-// cuál vino.
-//
-// Se elige con OCR_PROVIDER ('claude' o 'gemini'). Sin esa variable, se usa
-// Claude si hay ANTHROPIC_API_KEY y Gemini si no, para que el que despliegue
-// sin tocar nada siga con lo que tenga configurado.
-const PROVEEDOR_OCR = (process.env.OCR_PROVIDER || '').trim().toLowerCase()
-  || (process.env.ANTHROPIC_API_KEY ? 'claude' : 'gemini')
-
-const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages'
-const CLAUDE_MODEL = process.env.OCR_CLAUDE_MODEL || 'claude-haiku-4-5-20251001'
-
-/** Lo que devuelve cualquiera de los dos modelos, ya normalizado. */
-interface LecturaTicket {
-  /** El JSON con los campos del ticket, tal como lo devolvió el modelo */
-  datos: any
-  /** Tokens gastados, en el formato que espera registrarConsumo */
-  uso: { promptTokenCount: number; candidatesTokenCount: number } | null
-  modelo: string
-}
-
-/**
- * Lee el ticket con Claude.
- *
- * El formato se garantiza con una herramienta de un solo uso en vez de pedirlo
- * en el prompt: `tool_choice` obliga al modelo a contestar con ese esquema, que
- * es el equivalente del responseSchema de Gemini. Así no hay que limpiar vallas
- * de markdown ni rescatar el JSON con una expresión regular.
- */
-async function leerConClaude(prompt: string, base64Image: string, mimeType: string): Promise<LecturaTicket> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    throw Object.assign(new Error('ANTHROPIC_API_KEY no configurada'), { sinCredenciales: true })
-  }
-
-  const herramienta = {
-    name: 'cargar_ticket',
-    description: 'Carga los datos leídos del ticket en el sistema de rendiciones.',
-    input_schema: {
-      type: 'object',
-      required: ['importe', 'fecha', 'pais', 'concepto', 'formalidad', 'proveedor'],
-      properties: {
-        importe:     { type: 'number', description: 'Total final a pagar, solo el número' },
-        fecha:       { type: 'string', description: 'YYYY-MM-DD, fecha de emisión' },
-        pais:        { type: 'string', enum: ['ARG', 'CHL', 'URY'] },
-        descripcion: { type: 'string', description: 'Nombre del comercio, máximo 120 caracteres' },
-        formalidad:  { type: 'string', enum: ['FORMAL', 'INFORMAL'] },
-        // Mismos enums cerrados que con Gemini: el modelo no puede inventar
-        // un proveedor ni una combinación de concepto que no exista.
-        proveedor:   { type: 'string', enum: CODIGOS_PROVEEDOR },
-        concepto:    { type: 'string', enum: CONCEPTOS_VALIDOS },
-      },
-    },
-  }
-
-  const respuesta = await postearConReintento(
-    CLAUDE_API_URL,
-    {
-      model: CLAUDE_MODEL,
-      max_tokens: 1024,
-      temperature: 0,       // extracción, no redacción
-      tools: [herramienta],
-      tool_choice: { type: 'tool', name: 'cargar_ticket' },
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Image } },
-          { type: 'text', text: prompt },
-        ],
-      }],
-    },
-    {
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      timeout: 60000,
-    }
-  )
-
-  const bloque = (respuesta.data?.content || []).find((c: any) => c.type === 'tool_use')
-  const uso = respuesta.data?.usage
-
-  return {
-    datos: bloque?.input || {},
-    uso: uso ? { promptTokenCount: uso.input_tokens, candidatesTokenCount: uso.output_tokens } : null,
-    modelo: CLAUDE_MODEL,
-  }
-}
-
-/** Lee el ticket con Gemini. Es el camino original, sin cambios. */
-async function leerConGemini(prompt: string, base64Image: string, mimeType: string): Promise<LecturaTicket> {
-  const apiKey = process.env.GOOGLE_VISION_API_KEY
-  if (!apiKey) {
-    throw Object.assign(new Error('GOOGLE_VISION_API_KEY no configurada'), { sinCredenciales: true })
-  }
-
-  const respuesta = await postearConReintento(
-    `${GEMINI_API_URL}?key=${apiKey}`,
-    {
-      contents: [{
-        parts: [
-          { inlineData: { mimeType, data: base64Image } },
-          { text: prompt },
-        ],
-      }],
-      generationConfig: {
-        temperature: 0,
-        maxOutputTokens: 400,
-        thinkingConfig: { thinkingBudget: 0 },
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'OBJECT',
-          required: ['importe', 'fecha', 'pais', 'concepto', 'formalidad', 'proveedor'],
-          properties: {
-            importe:     { type: 'NUMBER' },
-            fecha:       { type: 'STRING', description: 'YYYY-MM-DD, fecha de emisión' },
-            pais:        { type: 'STRING', enum: ['ARG', 'CHL', 'URY'] },
-            descripcion: { type: 'STRING' },
-            formalidad:  { type: 'STRING', enum: ['FORMAL', 'INFORMAL'] },
-            proveedor:   { type: 'STRING', enum: CODIGOS_PROVEEDOR },
-            concepto:    { type: 'STRING', enum: CONCEPTOS_VALIDOS },
-          },
-        },
-      },
-    },
-    { headers: { 'Content-Type': 'application/json' }, timeout: 60000 }
-  )
-
-  const partes = respuesta.data?.candidates?.[0]?.content?.parts || []
-  const texto = partes.find((p: any) => p.text !== undefined)?.text || ''
-
-  let datos: any = {}
-  if (texto.trim()) {
-    try {
-      datos = JSON.parse(texto)
-    } catch {
-      console.error('[OCR] Gemini devolvió algo que no es JSON:', texto.slice(0, 300))
-    }
-  }
-
-  return { datos, uso: respuesta.data?.usageMetadata || null, modelo: 'gemini-2.5-flash' }
 }
 
 // ════════════════════════════════════════════
@@ -377,12 +184,21 @@ router.post('/scan', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'No se envió imagen' })
     }
 
+    const apiKey = process.env.GOOGLE_VISION_API_KEY
+    if (!apiKey) {
+      console.error('[OCR] GOOGLE_VISION_API_KEY no configurada')
+      return res.status(500).json({
+        success: false,
+        error: 'API Key de Google no configurada. Contactá al administrador.'
+      })
+    }
+
     // Extraer el tipo MIME y el base64 puro
     const mimeMatch = image.match(/^data:(image\/\w+);base64,/)
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg'
     const base64Image = image.replace(/^data:image\/\w+;base64,/, '')
 
-    console.log(`[OCR] Enviando imagen a ${PROVEEDOR_OCR === 'claude' ? CLAUDE_MODEL : 'gemini-2.5-flash'}...`)
+    console.log('[OCR] Enviando imagen a Gemini 2.5 Flash...')
     console.log(`[OCR] Tamaño base64: ${(base64Image.length / 1024).toFixed(0)} KB`)
 
     // Prompt optimizado para extracción de datos de tickets + clasificación Softland
@@ -529,27 +345,90 @@ REGLAS DE EXTRACCIÓN:
 - FECHA: Extraé ÚNICAMENTE la fecha de emisión/transacción (cuándo se pagó). IGNORÁ completamente: fechas de vencimiento, "Vto", "Venc", "Válido hasta", "CAI Vto", "Fecha CAI". Si el ticket tiene una fecha junto a la hora (ej: "15/03/2025 14:32"), esa es la fecha de la transacción. Si hay varias fechas, usá la que está al principio del ticket o junto a "Fecha:" / "Date:" / "Emisión:"
 - Para el país, basate en indicadores fiscales (CUIT, RUT, RUC, tipo de IVA, etc.)`
 
-    const lectura = PROVEEDOR_OCR === 'claude'
-      ? await leerConClaude(prompt, base64Image, mimeType)
-      : await leerConGemini(prompt, base64Image, mimeType)
+    const geminiResponse = await postearAGeminiConReintento(
+      `${GEMINI_API_URL}?key=${apiKey}`,
+      {
+        contents: [
+          {
+            parts: [
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64Image
+                }
+              },
+              {
+                text: prompt
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0,          // extracción, no redacción: determinista
+          maxOutputTokens: 400,    // sin transcripción, la respuesta son ~40 palabras
+          thinkingConfig: {
+            thinkingBudget: 0
+          },
+          // El esquema garantiza la forma de la respuesta: no hay que limpiar
+          // vallas de markdown ni rescatar el JSON con una expresión regular.
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            required: ['importe', 'fecha', 'pais', 'concepto', 'formalidad', 'proveedor'],
+            properties: {
+              importe:     { type: 'NUMBER' },
+              fecha:       { type: 'STRING', description: 'YYYY-MM-DD, fecha de emisión' },
+              pais:        { type: 'STRING', enum: ['ARG', 'CHL', 'URY'] },
+              descripcion: { type: 'STRING' },
+              formalidad:  { type: 'STRING', enum: ['FORMAL', 'INFORMAL'] },
+              // Igual que con el concepto: el modelo solo puede elegir un número
+              // que existe en Softland, nunca inventar uno.
+              proveedor:   { type: 'STRING', enum: CODIGOS_PROVEEDOR },
+              // Un solo campo con los 25 pares válidos: así el modelo no puede
+              // devolver combinaciones inexistentes como COMBLU/5.
+              concepto: {
+                type: 'STRING',
+                enum: CONCEPTOS_VALIDOS
+              }
+            }
+          }
+        }
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 60000
+      }
+    )
 
-    console.log(`[OCR] Respuesta de ${lectura.modelo}:`)
+    // Extraer la respuesta de Gemini (buscar la parte con texto, no thinking)
+    const parts = geminiResponse.data?.candidates?.[0]?.content?.parts || []
+    const textPart = parts.find((p: any) => p.text !== undefined)
+    const geminiText = textPart?.text || ''
+
+    console.log('[OCR] Respuesta de Gemini:')
     console.log('─'.repeat(50))
-    console.log(JSON.stringify(lectura.datos))
+    console.log(geminiText)
     console.log('─'.repeat(50))
 
-    // Lo que costó esta llamada, medido por el proveedor (no estimado por
-    // nosotros). Se acumula en memoria para poder ver el consumo del día sin
-    // entrar a la consola; GET /api/ocr/consumo lo devuelve.
-    registrarConsumo(lectura.uso)
-
-    const datos: any = lectura.datos || {}
-
-    if (!datos || Object.keys(datos).length === 0) {
+    if (!geminiText.trim()) {
       return res.json({
         success: true,
         datos: { importe: '', fecha: '', pais: '', descripcion: '' },
         mensaje: 'No se pudo leer el ticket. Intentá con una foto más clara.'
+      })
+    }
+
+    // Con responseMimeType 'application/json' la respuesta ya es JSON válido.
+    // El try/catch queda como red de seguridad ante un cambio de la API.
+    let datos: any = {}
+    try {
+      datos = JSON.parse(geminiText)
+    } catch {
+      console.error('[OCR] Gemini devolvió algo que no es JSON:', geminiText.slice(0, 300))
+      return res.json({
+        success: true,
+        datos: { importe: '', fecha: '', pais: '', descripcion: '' },
+        mensaje: 'Se leyó el ticket pero no se pudieron extraer los datos automáticamente.'
       })
     }
 
@@ -599,7 +478,7 @@ REGLAS DE EXTRACCIÓN:
       proveedor: proveedor?.nombre || '',
     }
 
-    console.log(`[OCR] Datos extraídos por ${lectura.modelo}:`, {
+    console.log('[OCR] Datos extraídos por Gemini:', {
       importe: resultado.importe,
       fecha: resultado.fecha,
       pais: resultado.pais,
@@ -619,35 +498,9 @@ REGLAS DE EXTRACCIÓN:
   } catch (error: any) {
     console.error('[OCR] Error:', error.message)
 
-    // Falta la credencial del proveedor elegido: es configuración, no la foto
-    if (error.sinCredenciales) {
-      return res.status(500).json({
-        success: false,
-        error: 'El servicio de lectura no está configurado. Contactá al administrador.',
-        details: error.message
-      })
-    }
-
     if (error.response) {
-      console.error(`[OCR] ${PROVEEDOR_OCR} status:`, error.response.status)
-      console.error(`[OCR] ${PROVEEDOR_OCR} error:`, JSON.stringify(error.response.data?.error || error.response.data))
-
-      // Claude devuelve 401 con una key inválida o sin saldo
-      if (error.response.status === 401) {
-        return res.status(500).json({
-          success: false,
-          error: 'La credencial del servicio de lectura es inválida o quedó sin crédito.',
-          details: error.response.data?.error?.message
-        })
-      }
-      // 529 es el "overloaded" de Claude, equivalente al 503 de Gemini
-      if (error.response.status === 529) {
-        return res.status(503).json({
-          success: false,
-          error: 'El servicio de lectura está saturado en este momento. Probá de nuevo en un minuto — la foto no se perdió.',
-          details: error.response.data?.error?.message
-        })
-      }
+      console.error('[OCR] Gemini API Status:', error.response.status)
+      console.error('[OCR] Gemini API Error:', JSON.stringify(error.response.data?.error || error.response.data))
 
       if (error.response.status === 400) {
         return res.status(400).json({
@@ -659,7 +512,7 @@ REGLAS DE EXTRACCIÓN:
       if (error.response.status === 403) {
         return res.status(500).json({
           success: false,
-          error: 'La credencial del servicio de lectura no tiene permisos. Verificá la configuración.',
+          error: 'API Key sin permisos. Verificá que la Generative Language API esté habilitada en Google Cloud.',
           details: error.response.data?.error?.message
         })
       }
