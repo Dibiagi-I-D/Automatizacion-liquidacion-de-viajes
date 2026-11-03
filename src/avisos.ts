@@ -50,21 +50,4 @@ export const AVISOS: Aviso[] = [
       'PARA TODOS: gracias por la paciencia durante estos días. Ante cualquier duda, comuníquense con el sector.',
     ],
   },
-  {
-    id: '2026-10-06-lectura-de-fotos v1',
-    fecha: '06/10/2026',
-    titulo: 'La lectura automática de fotos está pausada',
-    // Resuelto el 03/11/2026: queda en la campanita como historial, pero ya
-    // no traba la entrada — ver el aviso de arriba.
-    bloqueante: false,
-    detalle: [
-      '¡Hola! 👋 Somos de DIBIAGI, sector Implementación y Desarrollo. Les contamos una novedad importante sobre la app:',
-      'QUÉ ESTÁ PASANDO:',
-      '-Por el momento las fotos que saquen NO se van a poder analizar automáticamente. Tenemos que ajustar los créditos de la inteligencia artificial que se encarga de leer los tickets.',
-      'QUÉ TIENEN QUE HACER MIENTRAS TANTO:',
-      '-Sigan juntando los tickets como lo venían haciendo antes. No cambia nada en ese sentido.',
-      '-Por favor vuelvan a entrar a la aplicación más tarde. Cuando vean el aviso de que ya está listo, pueden seguir usándola con normalidad.',
-      'PARA TODOS: ante cualquier duda o consulta, no duden en comunicarse con el sector. Gracias por la paciencia.',
-    ],
-  },
 ];
