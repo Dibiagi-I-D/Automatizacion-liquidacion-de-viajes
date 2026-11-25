@@ -20,3 +20,9 @@ coverage
 build
 .turbo
 prisma/migrations
+
+# Material de capacitación de choferes: capturas, guiones, PDFs y videos.
+# Queda local a propósito. Las capturas tienen datos reales de personal
+# (nombre, legajo, patentes, importes) y los videos pesan demasiado para Git.
+fotos_capacitacion/
+docs/tutoriales/
