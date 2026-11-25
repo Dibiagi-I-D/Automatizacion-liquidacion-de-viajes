@@ -35,19 +35,21 @@ export interface Aviso {
 
 export const AVISOS: Aviso[] = [
   {
-    id: '2026-11-03-lectura-de-fotos-restablecida v1',
-    fecha: '03/11/2026',
-    titulo: 'Ya pueden volver a usar la app con normalidad',
+    id: '2026-11-25-puesta-en-marcha-y-capacitacion v1',
+    fecha: '25/11/2026',
+    titulo: 'La app ya está en funcionamiento de forma oficial',
     bloqueante: true,
     detalle: [
-      '¡Hola! 👋 Somos de DIBIAGI, sector Implementación y Desarrollo. Les traemos una buena noticia:',
-      'YA ESTÁ RESUELTO:',
-      '-La lectura automática de fotos vuelve a funcionar. Cuando saquen la foto del ticket, los datos se completan solos como antes.',
-      'QUÉ TIENEN QUE HACER:',
-      '-Carguen los gastos como siempre, sacando la foto de cada ticket.',
-      '-Si juntaron tickets en papel estos días, pueden cargarlos ahora.',
-      '-Revisen igual que el importe y la fecha hayan quedado bien antes de guardar. Si algo salió mal, corríjanlo a mano.',
-      'PARA TODOS: gracias por la paciencia durante estos días. Ante cualquier duda, comuníquense con el sector.',
+      '¡Hola! 👋 Somos de DIBIAGI, sector Implementación y Desarrollo.',
+      'A partir de ahora la app queda habilitada formalmente para el uso de todos los días: la carga de gastos y el aviso de novedades de las unidades se hacen desde acá.',
+      'ANTES DE EMPEZAR, ENTRÁ ACÁ:',
+      'https://capacity-chof.vercel.app/',
+      'QUÉ TENÉS QUE HACER EN ESE SITIO:',
+      '-Crearte una cuenta con tus datos.',
+      '-Mirar los videos de capacitación. Son cortos y te muestran, paso a paso y con las pantallas reales, cómo cargar un gasto y cómo informar una novedad.',
+      '-Si después de ver los videos te queda alguna duda, llamanos al sector y te la resolvemos.',
+      'POR QUÉ IMPORTA: los videos muestran los dos errores más comunes, que son cargar varios tickets juntos en una sola foto y no verificar que el importe leído coincida con el ticket. Verlos te ahorra tener que rehacer la rendición después.',
+      'Ante cualquier problema, comunicate con el sector de Implementación y Desarrollo.',
     ],
   },
 ];

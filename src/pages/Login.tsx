@@ -24,6 +24,38 @@ interface Tractor {
   USR_TRASEM_CONDIC: string;
 }
 
+/**
+ * Convierte las URLs sueltas de un aviso en links que se puedan tocar.
+ *
+ * Los avisos se escriben como texto plano en avisos.ts, así que una dirección
+ * quedaba impresa tal cual y el chofer tenía que tipearla a mano en el celular.
+ * Acá se parte el renglón por las URLs y cada una se devuelve como <a>.
+ *
+ * El recorte final del regex deja afuera la puntuación pegada al cierre
+ * (un punto o una coma al terminar la oración), que no es parte de la dirección.
+ */
+function conLinks(texto: string) {
+  const partes = texto.split(/(https?:\/\/[^\s]+)/g)
+  return partes.map((parte, i) => {
+    if (!/^https?:\/\//.test(parte)) return parte
+    const url = parte.replace(/[.,;:)]+$/, '')
+    const resto = parte.slice(url.length)
+    return (
+      <span key={i}>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-emerald-400 underline underline-offset-2 break-all hover:text-emerald-300"
+        >
+          {url}
+        </a>
+        {resto}
+      </span>
+    )
+  })
+}
+
 export default function Login() {
   const navigate = useNavigate()
   const { login } = useAuth()
@@ -337,12 +369,12 @@ export default function Login() {
                     if (linea.trim().startsWith('-')) {
                       return (
                         <p key={i} className="text-gray-300 text-sm leading-relaxed pl-3 border-l-2 border-white/10">
-                          {linea.replace(/^\s*-\s*/, '')}
+                          {conLinks(linea.replace(/^\s*-\s*/, ''))}
                         </p>
                       )
                     }
                     return (
-                      <p key={i} className="text-gray-300 text-sm leading-relaxed">{linea}</p>
+                      <p key={i} className="text-gray-300 text-sm leading-relaxed">{conLinks(linea)}</p>
                     )
                   })}
                 </div>
